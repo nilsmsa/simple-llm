@@ -1,0 +1,17 @@
+[package]
+name = "simple-llm"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "simple_llm"
+path = "src/lib.rs"
+
+[[bin]]
+name = "simple-llm"
+path = "src/main.rs"
+
+[dependencies]
+rand = "0.10.1"
+rand_distr = "0.6"
+rayon = "1.10"
