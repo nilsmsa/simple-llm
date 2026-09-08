@@ -1,6 +1,6 @@
 # Kommunedemoen steg for steg
 
-Dette dokumentet følger én kjøring av [`kommuner_demo.txt`](./kommuner_demo.txt) fra tekst til training og prediksjon.
+Dette dokumentet følger én kjøring av [`kommuner_demo.txt`](./kommuner_demo.txt) fra tekst til trening og prediksjon.
 
 Kommandoen er:
 
@@ -62,7 +62,7 @@ Modellen får 400 trenbare parametere:
 
 Embedding- og output-vektene initialiseres tilfeldig med `seed=42`. Query-, key- og value-vektene starter på `0.01`.
 
-## 3. Sliding windows lager training-eksempler
+## 3. Sliding windows lager treningseksempler
 
 `seq-len=4` betyr fire context-tokens og ett target-token per vindu.
 
@@ -81,7 +81,7 @@ Treningsfilen inneholder 224 tokens. Det gir 220 overlappende vinduer per epoch.
 220 × 3000 = 660 000 vektoppdateringer
 ```
 
-Resten av dette training-eksempelet følger det første vinduet:
+Resten av dette treningseksempelet følger det første vinduet:
 
 ```text
 context = [bergen, kommune, ligger, i]
@@ -155,7 +155,7 @@ bergen kommune ligger i -> ?
 
 Output-laget gjør de åtte tallene om til 13 logits, én per token i vocabulary.
 
-Tidlig i training er vektene nesten tilfeldige. Modellen kan derfor for eksempel gi høyest logit til `trøndelag`:
+Tidlig i treningen er vektene nesten tilfeldige. Modellen kan derfor for eksempel gi høyest logit til `trøndelag`:
 
 ```text
 vestland:   lavere logit
@@ -163,7 +163,7 @@ trøndelag:  høyeste logit  <- feil prediksjon
 troms:      lavere logit
 ```
 
-Target er `vestland`. Training må øke preferansen for `vestland` og redusere preferansen for de andre tokenene.
+Target er `vestland`. Treningen må øke preferansen for `vestland` og redusere preferansen for de andre tokenene.
 
 ## 5. Ett konkret regnestykke med små vektorer
 
@@ -418,9 +418,9 @@ bodø      ... -> nordland
 
 Modellen lærer ikke en regel om norsk geografi. Den justerer 400 tall slik at riktig fylke får høyest logit etter de observerte contextene.
 
-## 12. Predict-loopen
+## 12. Prediksjonsloopen
 
-Training er nå ferdig. Under prediction finnes verken target, loss, backpropagation eller vektoppdatering.
+Treningen er nå ferdig. Under prediksjon finnes verken target, loss, backpropagation eller vektoppdatering.
 
 Prompten er:
 
@@ -477,13 +477,13 @@ Prosessen gjentas:
 context -> forward pass -> argmax -> legg til token
 ```
 
-Contexten vokser med ett token per runde. Koden begrenser ikke prediction til `seq_len=4`; den bruker hele den voksende sekvensen.
+Contexten vokser med ett token per runde. Koden begrenser ikke prediksjon til `seq_len=4`; den bruker hele den voksende sekvensen.
 
 Modellen har heller ikke et stopptoken. Den utfører derfor alle 50 rundene selv om første nye token allerede besvarte spørsmålet.
 
-## 13. Forskjellen på training og prediction
+## 13. Forskjellen på trening og prediksjon
 
-| Training | Prediction |
+| Trening | Prediksjon |
 |----------|------------|
 | Har et kjent target | Har ikke target |
 | Beregner cross-entropy-gradient fra target | Beregner ingen gradient |
@@ -492,4 +492,4 @@ Modellen har heller ikke et stopptoken. Den utfører derfor alle 50 rundene selv
 | Bruker vinduer med `seq_len=4` | Bruker hele den voksende contexten |
 | Lærer fra riktig neste token | Bruker eget forrige svar som input |
 
-Det viktigste skillet er at training spør «hvor feil var svaret, og hvilke vekter bidro til feilen?». Prediction spør bare «hvilket token har høyest logit nå?».
+Det viktigste skillet er at trening spør «hvor feil var svaret, og hvilke vekter bidro til feilen?». Prediksjon spør bare «hvilket token har høyest logit nå?».

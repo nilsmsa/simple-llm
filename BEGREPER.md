@@ -4,7 +4,7 @@ Dette dokumentet følger dataene gjennom modellen i samme rekkefølge som koden.
 
 Se [`KOMMUNER_STEG_FOR_STEG.md`](./KOMMUNER_STEG_FOR_STEG.md) for et konkret regneeksempel som følger én feil prediksjon gjennom backpropagation.
 
-Hele training-flyten kan oppsummeres slik:
+Hele treningsflyten kan oppsummeres slik:
 
 ```text
 tekst
@@ -18,7 +18,7 @@ tekst
   -> oppdaterte vekter
 ```
 
-## 1. Tekst blir training-eksempler
+## 1. Tekst blir treningseksempler
 
 ### Token og vocabulary
 
@@ -50,7 +50,7 @@ context                              target
 [bergen, kommune, ligger, i]    ->   vestland
 ```
 
-Vinduet flyttes ett token om gangen. Én tekst gir derfor mange training-eksempler.
+Vinduet flyttes ett token om gangen. Én tekst gir derfor mange treningseksempler.
 
 ## 2. Embedding gjør tokens om til vektorer
 
@@ -100,7 +100,7 @@ Scoren deles på kvadratroten av `d_model`. Denne skaleringen hindrer at større
 
 Modellen skal predikere framtidige tokens uten å se dem. En causal mask setter scoren til alle framtidige posisjoner til minus uendelig.
 
-Et token kan dermed bare bruke seg selv og tokens som står tidligere i teksten. Uten masken kunne modellen ha sett fasiten under training.
+Et token kan dermed bare bruke seg selv og tokens som står tidligere i teksten. Uten masken kunne modellen ha sett fasiten under trening.
 
 ### Attention-softmax
 
@@ -297,9 +297,9 @@ Hvert lag kaller `update_weights`:
 vekt = vekt - learning_rate × gradient
 ```
 
-Gradientene nullstilles etter oppdateringen, slik at neste training-eksempel starter uten rester fra det forrige.
+Gradientene nullstilles etter oppdateringen, slik at neste treningseksempel starter uten rester fra det forrige.
 
-Én epoch er én full gjennomgang av alle training-vinduene. Flere epochs betyr at modellen får flere muligheter til å justere vektene.
+Én epoch er én full gjennomgang av alle treningsvinduene. Flere epochs betyr at modellen får flere muligheter til å justere vektene.
 
 ## 14. Generering bruker bare forward pass
 
