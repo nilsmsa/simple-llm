@@ -1,7 +1,6 @@
 # Verifikasjon av simple-llm
 
-Se [`BEGREPER.md`](./BEGREPER.md) for en trinnvis forklaring av dataflyten og
-LLM-begrepene som brukes her og i kildekoden.
+Se [`BEGREPER.md`](./BEGREPER.md) for en trinnvis forklaring av dataflyten og LLM-begrepene som brukes her og i kildekoden.
 
 Koden implementerer en enkel autoregressiv språkmodell:
 
@@ -18,19 +17,13 @@ Koden implementerer en enkel autoregressiv språkmodell:
 cargo test --quiet
 ```
 
-Kommandoen rapporterer 106 beståtte testkjøringer. Testene for
-`linear_layer` og `self_attatention_layer` sammenligner `backward()` med
-numeriske gradienter beregnet med finite differences. De gjentar derfor ikke
-bare formlene i implementasjonen.
+Kommandoen rapporterer 106 beståtte testkjøringer. Testene for `linear_layer` og `self_attatention_layer` sammenligner `backward()` med numeriske gradienter beregnet med finite differences. De gjentar derfor ikke bare formlene i implementasjonen.
 
-Testene bekrefter også at samme `seed` gir identiske vekter og prediksjoner,
-mens ulike seeds gir ulike startvekter.
+Testene bekrefter også at samme `seed` gir identiske vekter og prediksjoner, mens ulike seeds gir ulike startvekter.
 
 ## Loss synker under trening
 
-Modellen ble trent på
-[`verifikasjon_test_data.txt`](./verifikasjon_test_data.txt) med `seed=42`,
-`d-model=8`, `seq-len=3` og `learning-rate=0.05`.
+Modellen ble trent på [`verifikasjon_test_data.txt`](./verifikasjon_test_data.txt) med `seed=42`, `d-model=8`, `seq-len=3` og `learning-rate=0.05`.
 
 | Epoch | Gjennomsnittlig cross-entropy-loss |
 |------:|-----------------------------------:|
@@ -40,9 +33,7 @@ Modellen ble trent på
 | 15 | 0.20894644 |
 | 19 | 0.16499466 |
 
-Denne separate målingen viser at loss synker når gradient descent forbedrer
-vektene. `train_model` beregner gradienten direkte og trenger ikke selve
-loss-tallet for å oppdatere vektene.
+Denne separate målingen viser at loss synker når gradient descent forbedrer vektene. `train_model` beregner gradienten direkte og trenger ikke selve loss-tallet for å oppdatere vektene.
 
 ## Attention bruker tidligere kontekst
 
@@ -80,11 +71,9 @@ cargo run --release -- \
   "the cat sat on the"
 ```
 
-Det første nye tokenet blir `mat`. Modellen bruker dermed informasjon fra
-tidligere i konteksten, ikke bare siste token.
+Det første nye tokenet blir `mat`. Modellen bruker dermed informasjon fra tidligere i konteksten, ikke bare siste token.
 
-Med vocabulary på 9 tokens og `d-model=8` har modellen 336 trenbare
-parametere:
+Med vocabulary på 9 tokens og `d-model=8` har modellen 336 trenbare parametere:
 
 - embedding: 72
 - attention: 192
@@ -100,5 +89,4 @@ Verifikasjonen viser at:
 - attention kan bruke tidligere tokens i konteksten
 - samme seed gir reproduserbare resultater
 
-Modellen er med vilje begrenset. Den mangler blant annet positional encoding,
-multi-head attention, feed-forward-lag, batching og stopptoken.
+Modellen er med vilje begrenset. Den mangler blant annet positional encoding, multi-head attention, feed-forward-lag, batching og stopptoken.

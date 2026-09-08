@@ -1,8 +1,6 @@
 # Kommunedemoen steg for steg
 
-Dette dokumentet følger én kjøring av
-[`kommuner_demo.txt`](./kommuner_demo.txt) fra tekst til training og
-prediksjon.
+Dette dokumentet følger én kjøring av [`kommuner_demo.txt`](./kommuner_demo.txt) fra tekst til training og prediksjon.
 
 Kommandoen er:
 
@@ -20,8 +18,7 @@ cargo run --release -- \
 
 ## 1. Tokenizeren bygger vocabulary
 
-Word-tokenizeren går gjennom treningsfilen fra venstre mot høyre. Hvert nytt
-ord eller tegn får neste ledige ID:
+Word-tokenizeren går gjennom treningsfilen fra venstre mot høyre. Hvert nytt ord eller tegn får neste ledige ID:
 
 | ID | Token |
 |---:|-------|
@@ -63,8 +60,7 @@ Modellen får 400 trenbare parametere:
 | Output | `13 × 8` | 104 |
 | **Totalt** | | **400** |
 
-Embedding- og output-vektene initialiseres tilfeldig med `seed=42`.
-Query-, key- og value-vektene starter på `0.01`.
+Embedding- og output-vektene initialiseres tilfeldig med `seed=42`. Query-, key- og value-vektene starter på `0.01`.
 
 ## 3. Sliding windows lager training-eksempler
 
@@ -79,8 +75,7 @@ De første vinduene er:
 [i, vestland, fylke, .]            -> trondheim
 ```
 
-Treningsfilen inneholder 224 tokens. Det gir 220 overlappende vinduer per
-epoch. Med 3000 epochs utfører modellen:
+Treningsfilen inneholder 224 tokens. Det gir 220 overlappende vinduer per epoch. Med 3000 epochs utfører modellen:
 
 ```text
 220 × 3000 = 660 000 vektoppdateringer
@@ -122,13 +117,11 @@ embedding × Wk -> key
 embedding × Wv -> value
 ```
 
-Resultatet er fire query-vektorer, fire key-vektorer og fire value-vektorer.
-Hver vektor har åtte tall.
+Resultatet er fire query-vektorer, fire key-vektorer og fire value-vektorer. Hver vektor har åtte tall.
 
 ### 4.3 Attention-score
 
-Hver query sammenlignes med hver key. Det gir en `4 × 4`-matrise med 16
-scorer.
+Hver query sammenlignes med hver key. Det gir en `4 × 4`-matrise med 16 scorer.
 
 Causal mask skjuler tokens som ligger framover i teksten:
 
@@ -140,13 +133,11 @@ ligger       synlig   synlig  synlig  skjult
 i            synlig   synlig  synlig  synlig
 ```
 
-Softmax gjør de synlige scorene om til attention-sannsynligheter. Den siste
-posisjonen, `i`, kan hente informasjon fra alle fire tokens.
+Softmax gjør de synlige scorene om til attention-sannsynligheter. Den siste posisjonen, `i`, kan hente informasjon fra alle fire tokens.
 
 ### 4.4 Context-vektor
 
-Attention-sannsynlighetene brukes til å blande value-vektorene. Resultatet er
-én ny vektor per token.
+Attention-sannsynlighetene brukes til å blande value-vektorene. Resultatet er én ny vektor per token.
 
 Bare den siste context-vektoren brukes videre:
 
@@ -164,8 +155,7 @@ bergen kommune ligger i -> ?
 
 Output-laget gjør de åtte tallene om til 13 logits, én per token i vocabulary.
 
-Tidlig i training er vektene nesten tilfeldige. Modellen kan derfor for
-eksempel gi høyest logit til `trøndelag`:
+Tidlig i training er vektene nesten tilfeldige. Modellen kan derfor for eksempel gi høyest logit til `trøndelag`:
 
 ```text
 vestland:   lavere logit
@@ -173,20 +163,17 @@ trøndelag:  høyeste logit  <- feil prediksjon
 troms:      lavere logit
 ```
 
-Target er `vestland`. Training må øke preferansen for `vestland` og redusere
-preferansen for de andre tokenene.
+Target er `vestland`. Training må øke preferansen for `vestland` og redusere preferansen for de andre tokenene.
 
 ## 5. Ett konkret regnestykke med små vektorer
 
-Den virkelige modellen bruker åtte tall per vektor og 13 mulige output-tokens.
-For å gjøre regnestykket lesbart bruker dette avsnittet:
+Den virkelige modellen bruker åtte tall per vektor og 13 mulige output-tokens. For å gjøre regnestykket lesbart bruker dette avsnittet:
 
 - to tall per vektor
 - tre mulige fylkestokens
 - samme operasjoner og samme `learning_rate=0.05` som koden
 
-Tallene er pedagogiske eksempelverdier, ikke en utskrift av vektene fra
-`seed=42`.
+Tallene er pedagogiske eksempelverdier, ikke en utskrift av vektene fra `seed=42`.
 
 ### 5.1 Attention blander values
 
@@ -265,9 +252,7 @@ Cross-entropy-loss for dette svaret ville vært omtrent:
 -ln(0.381) = 0.965
 ```
 
-`train_model` beregner ikke dette tallet i hver runde. Tallet er nyttig for å
-måle fremgang, men vektoppdateringen trenger bare gradienten som beregnes i
-neste steg.
+`train_model` beregner ikke dette tallet i hver runde. Tallet er nyttig for å måle fremgang, men vektoppdateringen trenger bare gradienten som beregnes i neste steg.
 
 ## 6. Backpropagation starter ved output
 
@@ -320,8 +305,7 @@ Med `learning_rate=0.05` blir `vestland`-vektene:
 = [1.014, 0.503]
 ```
 
-Begge vektene øker. Den samme context-vektoren vil derfor gi `vestland` en
-høyere logit neste gang.
+Begge vektene øker. Den samme context-vektoren vil derfor gi `vestland` en høyere logit neste gang.
 
 For `trøndelag`:
 
@@ -334,13 +318,11 @@ nye vekter:
 = [1.191, 0.098]
 ```
 
-Vektene reduseres, slik at `trøndelag` får en lavere logit i en lignende
-context.
+Vektene reduseres, slik at `trøndelag` får en lavere logit i en lignende context.
 
 ## 8. Feilsignalet sendes til attention
 
-Output-laget må også forklare hvordan context-vektoren bidro til feilen.
-Det beregner:
+Output-laget må også forklare hvordan context-vektoren bidro til feilen. Det beregner:
 
 ```text
 grad_context = output-vekter transponert × grad_logits
@@ -360,13 +342,11 @@ grad_context = [-0.178, -0.204]
 
 Dette er returverdien `d_last_token` fra `LinearLayer::backward`.
 
-`train_model` legger verdiene på siste plass i `d_context_sequence`. Denne
-listen blir `grad_output` til `SelfAttentionLayer::backward`.
+`train_model` legger verdiene på siste plass i `d_context_sequence`. Denne listen blir `grad_output` til `SelfAttentionLayer::backward`.
 
 ## 9. Attention-vektene endres
 
-Context-vektoren var et vektet gjennomsnitt av values. Derfor får hver
-value-vektor sin andel av `grad_context`:
+Context-vektoren var et vektet gjennomsnitt av values. Derfor får hver value-vektor sin andel av `grad_context`:
 
 ```text
 bergen:
@@ -382,18 +362,15 @@ i:
 0.3×[-0.178, -0.204] = [-0.053, -0.061]
 ```
 
-`bergen` får størst gradient fordi attention ga tokenet størst betydning i
-forward pass.
+`bergen` får størst gradient fordi attention ga tokenet størst betydning i forward pass.
 
-Backward pass følger også attention-sannsynlighetene tilbake gjennom softmax
-og scorene. Det gir gradients for query og key:
+Backward pass følger også attention-sannsynlighetene tilbake gjennom softmax og scorene. Det gir gradients for query og key:
 
 - query-gradienten endrer hva siste token leter etter
 - key-gradienten endrer hvilke tokens som ser relevante ut
 - value-gradienten endrer informasjonen tokenene sender videre
 
-Anta at én value-vekt var `0.25`, og at den samlede gradienten for vekten ble
-`-0.087`. Oppdateringen blir:
+Anta at én value-vekt var `0.25`, og at den samlede gradienten for vekten ble `-0.087`. Oppdateringen blir:
 
 ```text
 0.25 - 0.05×(-0.087) = 0.254
@@ -403,8 +380,7 @@ Vekten øker fordi den bidro i en retning som bør forsterkes.
 
 ## 10. Embedding-vektene endres
 
-Query, key og value ble alle beregnet fra embedding-vektorene. Gradientene fra
-de tre veiene summeres derfor til `d_embedded`.
+Query, key og value ble alle beregnet fra embedding-vektorene. Gradientene fra de tre veiene summeres derfor til `d_embedded`.
 
 Anta at de to første tallene i embedding for `bergen` var:
 
@@ -425,16 +401,13 @@ Oppdateringen blir:
 = [0.702, 0.096]
 ```
 
-Embedding for `bergen` er nå litt bedre tilpasset prediksjonen av `vestland`
-i denne contexten.
+Embedding for `bergen` er nå litt bedre tilpasset prediksjonen av `vestland` i denne contexten.
 
-Etter oppdateringen nullstilles alle gradients. Neste sliding window starter
-et nytt forward pass med de nye vektene.
+Etter oppdateringen nullstilles alle gradients. Neste sliding window starter et nytt forward pass med de nye vektene.
 
 ## 11. Hva 660 000 oppdateringer lærer
 
-Ett eksempel flytter vektene svært lite. De gjentatte setningene og 3000
-epochs gir samme mønster mange muligheter til å påvirke vektene:
+Ett eksempel flytter vektene svært lite. De gjentatte setningene og 3000 epochs gir samme mønster mange muligheter til å påvirke vektene:
 
 ```text
 bergen    ... -> vestland
@@ -443,13 +416,11 @@ tromsø    ... -> troms
 bodø      ... -> nordland
 ```
 
-Modellen lærer ikke en regel om norsk geografi. Den justerer 400 tall slik at
-riktig fylke får høyest logit etter de observerte contextene.
+Modellen lærer ikke en regel om norsk geografi. Den justerer 400 tall slik at riktig fylke får høyest logit etter de observerte contextene.
 
 ## 12. Predict-loopen
 
-Training er nå ferdig. Under prediction finnes verken target, loss,
-backpropagation eller vektoppdatering.
+Training er nå ferdig. Under prediction finnes verken target, loss, backpropagation eller vektoppdatering.
 
 Prompten er:
 
@@ -496,8 +467,7 @@ Hele den nye sekvensen kjøres gjennom modellen igjen:
 [bergen, ligger, i, vestland] -> neste token
 ```
 
-Modellen beregner nye embeddings, ny attention og nye logits. Det valgte
-tokenet legges til listen.
+Modellen beregner nye embeddings, ny attention og nye logits. Det valgte tokenet legges til listen.
 
 ### Runde 3 til 50
 
@@ -507,11 +477,9 @@ Prosessen gjentas:
 context -> forward pass -> argmax -> legg til token
 ```
 
-Contexten vokser med ett token per runde. Koden begrenser ikke prediction til
-`seq_len=4`; den bruker hele den voksende sekvensen.
+Contexten vokser med ett token per runde. Koden begrenser ikke prediction til `seq_len=4`; den bruker hele den voksende sekvensen.
 
-Modellen har heller ikke et stopptoken. Den utfører derfor alle 50 rundene
-selv om første nye token allerede besvarte spørsmålet.
+Modellen har heller ikke et stopptoken. Den utfører derfor alle 50 rundene selv om første nye token allerede besvarte spørsmålet.
 
 ## 13. Forskjellen på training og prediction
 
@@ -524,6 +492,4 @@ selv om første nye token allerede besvarte spørsmålet.
 | Bruker vinduer med `seq_len=4` | Bruker hele den voksende contexten |
 | Lærer fra riktig neste token | Bruker eget forrige svar som input |
 
-Det viktigste skillet er at training spør «hvor feil var svaret, og hvilke
-vekter bidro til feilen?». Prediction spør bare «hvilket token har høyest
-logit nå?».
+Det viktigste skillet er at training spør «hvor feil var svaret, og hvilke vekter bidro til feilen?». Prediction spør bare «hvilket token har høyest logit nå?».

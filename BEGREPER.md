@@ -1,7 +1,6 @@
 # Slik lærer modellen
 
-Dette dokumentet følger dataene gjennom modellen i samme rekkefølge som
-koden. Et begrep forklares før det brukes til å forklare neste steg.
+Dette dokumentet følger dataene gjennom modellen i samme rekkefølge som koden. Et begrep forklares før det brukes til å forklare neste steg.
 
 Se [`KOMMUNER_STEG_FOR_STEG.md`](./KOMMUNER_STEG_FOR_STEG.md) for et konkret regneeksempel som følger én feil prediksjon gjennom backpropagation.
 
@@ -23,9 +22,7 @@ tekst
 
 ### Token og vocabulary
 
-Et token er enheten modellen leser og predikerer. Med word-tokenizeren er et
-token vanligvis et ord eller et tegn. Vocabulary er alle tokenene modellen
-kjenner.
+Et token er enheten modellen leser og predikerer. Med word-tokenizeren er et token vanligvis et ord eller et tegn. Vocabulary er alle tokenene modellen kjenner.
 
 Tokenizerens `encode` erstatter hvert token med en numerisk token-ID:
 
@@ -34,16 +31,13 @@ bergen kommune ligger i vestland
    0       1       2   3    4
 ```
 
-Modellen regner bare med ID-er og tallvektorer. `decode` gjør token-ID-er om
-til tekst igjen.
+Modellen regner bare med ID-er og tallvektorer. `decode` gjør token-ID-er om til tekst igjen.
 
 ### BPE
 
-Byte Pair Encoding starter med én token-ID per byte. BPE-treningen finner
-bytepar som forekommer ofte og erstatter hvert par med ett nytt token.
+Byte Pair Encoding starter med én token-ID per byte. BPE-treningen finner bytepar som forekommer ofte og erstatter hvert par med ett nytt token.
 
-Dette endrer hvordan teksten deles opp, men ikke oppgaven til modellen:
-Den skal fortsatt predikere neste token.
+Dette endrer hvordan teksten deles opp, men ikke oppgaven til modellen: Den skal fortsatt predikere neste token.
 
 ### Context og target
 
@@ -82,13 +76,11 @@ Query beskriver hva tokenet leter etter.
 
 ### Key
 
-Key beskriver hva tokenet kan matches på. En query sammenlignes med alle keys
-for å finne relevante tokens.
+Key beskriver hva tokenet kan matches på. En query sammenlignes med alle keys for å finne relevante tokens.
 
 ### Value
 
-Value er informasjonen tokenet sender videre hvis det blir vurdert som
-relevant.
+Value er informasjonen tokenet sender videre hvis det blir vurdert som relevant.
 
 En huskeregel:
 
@@ -100,38 +92,29 @@ value = hva sender jeg videre?
 
 ### Attention-score
 
-`compute_scores` sammenligner hver query med hver key ved hjelp av dot product.
-Vektorer som peker i samme retning, får høy score.
+`compute_scores` sammenligner hver query med hver key ved hjelp av dot product. Vektorer som peker i samme retning, får høy score.
 
-Scoren deles på kvadratroten av `d_model`. Denne skaleringen hindrer at større
-vektorer gir svært store tall og ustabil softmax.
+Scoren deles på kvadratroten av `d_model`. Denne skaleringen hindrer at større vektorer gir svært store tall og ustabil softmax.
 
 ### Causal mask
 
-Modellen skal predikere framtidige tokens uten å se dem. En causal mask setter
-scoren til alle framtidige posisjoner til minus uendelig.
+Modellen skal predikere framtidige tokens uten å se dem. En causal mask setter scoren til alle framtidige posisjoner til minus uendelig.
 
-Et token kan dermed bare bruke seg selv og tokens som står tidligere i
-teksten. Uten masken kunne modellen ha sett fasiten under training.
+Et token kan dermed bare bruke seg selv og tokens som står tidligere i teksten. Uten masken kunne modellen ha sett fasiten under training.
 
 ### Attention-softmax
 
-`softmax_rows` gjør scorene om til attention-sannsynligheter som summerer til
-1. En sannsynlighet på `0.7` betyr at det aktuelle tokenet får 70 prosent av
-oppmerksomheten i den raden.
+`softmax_rows` gjør scorene om til attention-sannsynligheter som summerer til 1. En sannsynlighet på `0.7` betyr at det aktuelle tokenet får 70 prosent av oppmerksomheten i den raden.
 
 ### Context-vektor
 
-`mix_values` multipliserer hver value med attention-sannsynligheten sin og
-summerer resultatene.
+`mix_values` multipliserer hver value med attention-sannsynligheten sin og summerer resultatene.
 
-Resultatet er en context-vektor som inneholder en vektet blanding av
-informasjon fra de synlige tokenene.
+Resultatet er en context-vektor som inneholder en vektet blanding av informasjon fra de synlige tokenene.
 
 ## 4. Output-laget lager logits
 
-Modellen bruker context-vektoren ved siste posisjon til å vurdere neste token.
-Output-laget beregner én logit for hvert token i vocabulary:
+Modellen bruker context-vektoren ved siste posisjon til å vurdere neste token. Output-laget beregner én logit for hvert token i vocabulary:
 
 ```text
 vestland:   2.8
@@ -139,8 +122,7 @@ trøndelag:  0.4
 troms:     -0.7
 ```
 
-En logit er en rå score, ikke en sannsynlighet. Høyere logit betyr at modellen
-foretrekker tokenet.
+En logit er en rå score, ikke en sannsynlighet. Høyere logit betyr at modellen foretrekker tokenet.
 
 Softmax gjør logitene om til sannsynligheter som summerer til 1:
 
@@ -150,13 +132,11 @@ trøndelag:  0.10
 troms:      0.04
 ```
 
-Under generering velger `argmax` tokenet med høyest logit. Virkelige LLM-er
-kan i stedet sample fra sannsynlighetsfordelingen for å få mer variasjon.
+Under generering velger `argmax` tokenet med høyest logit. Virkelige LLM-er kan i stedet sample fra sannsynlighetsfordelingen for å få mer variasjon.
 
 ## 5. Loss måler hvor feil prediksjonen var
 
-Target representeres som one-hot. Riktig token får verdien 1, og alle andre
-får 0:
+Target representeres som one-hot. Riktig token får verdien 1, og alle andre får 0:
 
 ```text
 target = vestland
@@ -171,13 +151,9 @@ Cross-entropy-loss ser på sannsynligheten modellen ga riktig token:
 - høy sannsynlighet for riktig token gir lav loss
 - lav sannsynlighet for riktig token gir høy loss
 
-Loss er ett tall for hele prediksjonen. Tallet forteller hvor dårlig svaret
-var, men ikke direkte hvilke vekter som må endres. Det er jobben til
-gradientene.
+Loss er ett tall for hele prediksjonen. Tallet forteller hvor dårlig svaret var, men ikke direkte hvilke vekter som må endres. Det er jobben til gradientene.
 
-`cross_entropy_loss` kan brukes til å måle fremgangen. `train_model` trenger
-ikke selve loss-tallet i hver runde og går derfor direkte fra logits og target
-til gradienten med `cross_entropy_derivative`. Det gir samme vektoppdatering.
+`cross_entropy_loss` kan brukes til å måle fremgangen. `train_model` trenger ikke selve loss-tallet i hver runde og går derfor direkte fra logits og target til gradienten med `cross_entropy_derivative`. Det gir samme vektoppdatering.
 
 ## 6. En gradient beskriver hvordan loss kan reduseres
 
@@ -198,11 +174,9 @@ ny vekt = gammel vekt - learning_rate × gradient
 
 ## 7. Den første gradienten kommer fra cross-entropy
 
-Backpropagation må starte med en gradient for modellens siste output:
-logitene.
+Backpropagation må starte med en gradient for modellens siste output: logitene.
 
-`cross_entropy_derivative` lager denne gradienten ved å trekke target fra
-sannsynligheten for hvert token:
+`cross_entropy_derivative` lager denne gradienten ved å trekke target fra sannsynligheten for hvert token:
 
 ```text
 sannsynligheter: [0.10, 0.70, 0.20]
@@ -210,8 +184,7 @@ target:           [0.00, 1.00, 0.00]
 gradient:         [0.10, -0.30, 0.20]
 ```
 
-De positive verdiene sier at logitene til feil tokens bør ned. Den negative
-verdien sier at logiten til riktig token bør opp.
+De positive verdiene sier at logitene til feil tokens bør ned. Den negative verdien sier at logiten til riktig token bør opp.
 
 I `train_model` heter denne verdien først `gradients`:
 
@@ -243,14 +216,11 @@ grad_input <- [ lag ] <- grad_output <- loss
 
 ### `grad_output`
 
-`grad_output` beskriver hvordan lagets output påvirket loss. Verdien kommer
-fra beregningen eller laget etter.
+`grad_output` beskriver hvordan lagets output påvirket loss. Verdien kommer fra beregningen eller laget etter.
 
 ### `grad_input`
 
-`grad_input` beskriver hvordan lagets input påvirket loss. Laget beregner
-denne verdien fra `grad_output` og sine egne vekter, og sender den til laget
-før.
+`grad_input` beskriver hvordan lagets input påvirket loss. Laget beregner denne verdien fra `grad_output` og sine egne vekter, og sender den til laget før.
 
 Navnene avhenger derfor av laget:
 
@@ -269,24 +239,20 @@ input: &[f32]
 grad_output: &[f32]
 ```
 
-`input` er context-vektoren som laget brukte i forward pass.
-`grad_output` er gradienten for logitene fra cross-entropy.
+`input` er context-vektoren som laget brukte i forward pass. `grad_output` er gradienten for logitene fra cross-entropy.
 
 Funksjonen beregner to resultater:
 
 1. `weight_gradients` for output-lagets egne vekter
 2. gradienten for context-vektoren som kom inn
 
-Gradienten for context-vektoren returneres som `d_last_token`. Navn med
-prefikset `d_` betyr her «gradienten med hensyn til denne verdien».
+Gradienten for context-vektoren returneres som `d_last_token`. Navn med prefikset `d_` betyr her «gradienten med hensyn til denne verdien».
 
 ## 10. Gradient for hele token-sekvensen
 
-Output-laget brukte bare context-vektoren ved siste posisjon. Derfor gjelder
-`d_last_token` bare denne posisjonen.
+Output-laget brukte bare context-vektoren ved siste posisjon. Derfor gjelder `d_last_token` bare denne posisjonen.
 
-`train_model` lager `d_context_sequence`, som har plass til alle posisjonene.
-Alle verdier starter på 0, og `d_last_token` kopieres inn på siste posisjon:
+`train_model` lager `d_context_sequence`, som har plass til alle posisjonene. Alle verdier starter på 0, og `d_last_token` kopieres inn på siste posisjon:
 
 ```text
 tidligere posisjoner: 0
@@ -297,9 +263,7 @@ Denne listen blir `grad_output` til `SelfAttentionLayer::backward`.
 
 ## 11. Backpropagation gjennom attention
 
-Attention-laget lagret `input`, query, key, value og
-attention-sannsynlighetene fra forward pass i en cache. Backward pass trenger
-disse verdiene for å følge regnestykkene i motsatt rekkefølge.
+Attention-laget lagret `input`, query, key, value og attention-sannsynlighetene fra forward pass i en cache. Backward pass trenger disse verdiene for å følge regnestykkene i motsatt rekkefølge.
 
 `SelfAttentionLayer::backward` finner:
 
@@ -309,19 +273,15 @@ disse verdiene for å følge regnestykkene i motsatt rekkefølge.
 4. hvordan query og key påvirket scorene
 5. hvordan embedding-vektorene påvirket query, key og value
 
-Underveis lagres gradients for `w_q`, `w_k` og `w_v`. Returverdien
-`d_embedded` beskriver hvordan alle embedding-vektorene påvirket loss.
+Underveis lagres gradients for `w_q`, `w_k` og `w_v`. Returverdien `d_embedded` beskriver hvordan alle embedding-vektorene påvirket loss.
 
 `d_embedded` blir dermed `grad_output` til embedding-lagets `backward`.
 
 ## 12. Backpropagation gjennom embedding
 
-`EmbeddingLayer::backward` kobler hver del av `d_embedded` til token-ID-en som
-opprinnelig hentet embedding-vektoren.
+`EmbeddingLayer::backward` kobler hver del av `d_embedded` til token-ID-en som opprinnelig hentet embedding-vektoren.
 
-Hvis samme token forekommer flere ganger, summeres gradientene. Laget
-returnerer ikke en ny gradient fordi token-ID-er er heltall og det ikke finnes
-noe tidligere trenbart lag.
+Hvis samme token forekommer flere ganger, summeres gradientene. Laget returnerer ikke en ny gradient fordi token-ID-er er heltall og det ikke finnes noe tidligere trenbart lag.
 
 Nå finnes det gradients for alle modellens trenbare vekter:
 
@@ -337,16 +297,13 @@ Hvert lag kaller `update_weights`:
 vekt = vekt - learning_rate × gradient
 ```
 
-Gradientene nullstilles etter oppdateringen, slik at neste training-eksempel
-starter uten rester fra det forrige.
+Gradientene nullstilles etter oppdateringen, slik at neste training-eksempel starter uten rester fra det forrige.
 
-Én epoch er én full gjennomgang av alle training-vinduene. Flere epochs betyr
-at modellen får flere muligheter til å justere vektene.
+Én epoch er én full gjennomgang av alle training-vinduene. Flere epochs betyr at modellen får flere muligheter til å justere vektene.
 
 ## 14. Generering bruker bare forward pass
 
-Under generering finnes ingen target og dermed ingen loss eller
-backpropagation.
+Under generering finnes ingen target og dermed ingen loss eller backpropagation.
 
 `predict_tokens` gjentar denne prosessen:
 
@@ -356,13 +313,10 @@ backpropagation.
 4. Legg tokenet til context.
 5. Bruk den utvidede contexten til neste prediksjon.
 
-Dette kalles autoregressiv generering: Modellen bruker sin egen output som
-input i neste runde.
+Dette kalles autoregressiv generering: Modellen bruker sin egen output som input i neste runde.
 
 ## 15. Seed og reproduserbarhet
 
-Embedding- og output-vektene starter tilfeldig. En seed bestemmer hvilke
-startverdier som brukes.
+Embedding- og output-vektene starter tilfeldig. En seed bestemmer hvilke startverdier som brukes.
 
-Samme seed, programversjon, plattform, treningsdata og parametere gir samme
-resultat. Seed gjør forsøket reproduserbart, men gjør ikke modellen bedre.
+Samme seed, programversjon, plattform, treningsdata og parametere gir samme resultat. Seed gjør forsøket reproduserbart, men gjør ikke modellen bedre.
