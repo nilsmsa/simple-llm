@@ -39,7 +39,7 @@ Se [BEGREPER.md](./BEGREPER.md) for en forklaring av dataflyten og [VERIFIKASJON
 
 Det meste av koden ble skrevet for hånd, med Google Gemini 3.1 Pro Advanced Thinking i nettleseren som sparringspartner og instruktør.
 
-Rydding, refaktorering og den første testrunden ble gjort med Qwen3-Coder-Next. Det er en kodeorientert mixture-of-experts-modell med 80 milliarder parametere totalt, hvor omtrent 3 milliarder er aktive per token. Modellen har en hybridarkitektur med Gated DeltaNet, attention og MoE-lag, og støtter en kontekst på opptil 256 000 tokens. Under arbeidet med dette prosjektet ble en kontekstlengde på 216 000 tokens brukt.
+Rydding, refaktorering og den første testrunden ble gjort med Qwen3-Coder-Next kjørende lokalt sammen med OpenCode. Det er en kodeorientert mixture-of-experts-modell med 80 milliarder parametere totalt, hvor omtrent 3 milliarder er aktive per token. Modellen har en hybridarkitektur med Gated DeltaNet, attention og MoE-lag, og støtter en kontekst på opptil 256 000 tokens. Under arbeidet med dette prosjektet ble en kontekstlengde på 216 000 tokens brukt.
 
 Word-tokenizeren ble i sin helhet skrevet av Qwen3-Coder-Next. Den ble lagt til etter at BPE-tokenizeren viste seg å fungere dårlig for denne svært lille demo-modellen. Med lite treningsdata lærer BPE få nyttige sammenslåinger. Hele ord gir mer lesbare sekvenser og passer derfor bedre til å demonstrere dataflyten, selv om en slik tokenizer ikke håndterer ukjente ord like godt.
 
