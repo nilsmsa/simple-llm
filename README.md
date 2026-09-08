@@ -19,7 +19,7 @@ Du trenger en nyere stabil versjon av Rust.
 
 ```bash
 cargo test
-cargo run --release -- veldig_enkel_tekst.txt "a b"
+cargo run --release -- -epochs=6000 -d-model=8 -seq-len=4 -learning-rate=0.001 -seed=42 kommuner_demo.txt "bergen ligger i"
 ```
 
 Eksempel med BPE-tokenisering:
