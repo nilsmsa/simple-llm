@@ -11,7 +11,7 @@ Modellen inneholder:
 - cross-entropy og backpropagation
 - oppdatering av vekter med SGD
 
-Dette er først og fremst et læreprosjekt, ikke en modell beregnet for praktisk bruk.
+Dette er først og fremst et læreprosjekt, ikke en modell beregnet for praktisk bruk. Løsningen inneholder ingen logikk for "stop" token, så etter at den har predikert noe mer eller mindre fornuftig vil den fortsette å predikere tull til den når grensen på antall tokens.
 
 ## Kom i gang
 
