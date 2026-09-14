@@ -127,7 +127,7 @@ impl SelfAttentionLayer {
             false,
         );
 
-        //Hjelper med å legge til input til context_sequence for residual connection
+        // Bevar tokenets egen embedding ved å legge den til attention-resultatet.
         for i in 0..context_sequence.len() {
             context_sequence[i] += input[i];
         }
@@ -288,6 +288,7 @@ impl SelfAttentionLayer {
             false,
             true,
         );
+        // Før gradienten gjennom den direkte residualveien tilbake til input.
         for i in 0..d_x.len() {
             d_x[i] += grad_output[i];
         }
@@ -592,7 +593,7 @@ mod tests {
     }
 
     #[test]
-    fn forward_applies_scaled_causal_self_attention() {
+    fn forward_applies_scaled_causal_self_attention_with_residual_connection() {
         let mut layer = layer_with_weights(
             vec![1.0, 0.0, 0.0, 1.0],
             vec![1.0, 0.0, 0.0, 1.0],
@@ -609,10 +610,10 @@ mod tests {
         assert_float_slices_eq(
             &output,
             &[
-                1.0,
+                2.0,
                 0.0,
                 second_token_first_probability,
-                second_token_self_probability,
+                second_token_self_probability + 1.0,
             ],
             TOLERANCE,
         );

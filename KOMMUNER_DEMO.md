@@ -38,8 +38,19 @@ Trainable parameters: 400
   Embedding: 104
   Attention (Q, K, V): 192
   Output: 104
-Predicted: 'bergen ligger i vestland ...'
+Predicted: 'bergen ligger i vestland fylke. trondheim kommune ...'
 ```
+
+Den relevante fullføringen har dermed endret seg slik:
+
+```text
+før:   bergen ligger i -> vestland + videre, usammenhengende tekst
+etter: bergen ligger i -> vestland fylke. + videre, usammenhengende tekst
+```
+
+Modellen har fortsatt ikke et stopptoken og genererer derfor videre etter
+punktum. Forbedringen er at den nå beholder nok informasjon om forrige token
+til å fullføre den trente frasen `vestland fylke.` før den fortsetter.
 
 Flere prompter:
 
@@ -65,6 +76,31 @@ bodø kommune ligger i -> nordland
 Kommunen er det eneste som skiller eksemplene. Modellen lærer derfor en kobling mellom kommunen og fylket. Attention-laget kan gi kommunen betydning i contexten selv om `kommune` mangler under prediksjon.
 
 Dette er begrenset generalisering over kjente tokens, ikke et eksakt tekstoppslag.
+
+Attention-outputen har nå en residualforbindelse:
+
+```text
+ny representasjon = attention(input) + input
+```
+
+Attention-grenen kan hente kommunen fra tidligere i contexten, mens den direkte
+residualveien bevarer embedding-representasjonen av tokenet på den aktuelle
+posisjonen. Etter at modellen har generert `vestland`, er det derfor enklere for
+output-laget å kjenne igjen at neste token skal være `fylke`, og deretter `.`.
+Uten residualforbindelsen måtte all informasjon om det siste tokenet passere
+gjennom value-projeksjonen og attention-blandingen. I denne lille modellen ble
+signalet for svakt eller forvrengt, slik at bare `vestland` ble riktig før
+genereringen sporet av.
+
+Backward pass har den tilsvarende direkte gradientveien:
+
+```text
+grad_input = grad_attention + grad_output
+```
+
+Dermed lærer embeddingene både gjennom attention-beregningen og direkte fra
+feilen i output-laget. Forward- og backward-pass beskriver med andre ord den
+samme residualforbindelsen.
 
 ## Begrensninger
 

@@ -112,6 +112,20 @@ Et token kan dermed bare bruke seg selv og tokens som står tidligere i teksten.
 
 Resultatet er en context-vektor som inneholder en vektet blanding av informasjon fra de synlige tokenene.
 
+### Residualforbindelse
+
+Attention-resultatet legges sammen med lagets opprinnelige input:
+
+```text
+output = attention(input) + input
+```
+
+Den direkte veien bevarer tokenets egen embedding, mens attention-grenen tilfører
+informasjon fra contexten. Det er særlig nyttig i den lille kommune-modellen:
+Når `vestland` er generert, kan neste runde bruke en tydelig representasjon av
+`vestland` til å predikere `fylke`, i stedet for å være avhengig av at all
+informasjon overlever attention-blandingen.
+
 ## 4. Output-laget lager logits
 
 Modellen bruker context-vektoren ved siste posisjon til å vurdere neste token. Output-laget beregner én logit for hvert token i vocabulary:
@@ -273,7 +287,16 @@ Attention-laget lagret `input`, query, key, value og attention-sannsynlighetene 
 4. hvordan query og key påvirket scorene
 5. hvordan embedding-vektorene påvirket query, key og value
 
-Underveis lagres gradients for `w_q`, `w_k` og `w_v`. Returverdien `d_embedded` beskriver hvordan alle embedding-vektorene påvirket loss.
+Underveis lagres gradients for `w_q`, `w_k` og `w_v`. Residualforbindelsen har
+også en direkte derivert lik 1, så `grad_output` legges til gradienten fra
+attention-grenen:
+
+```text
+d_embedded = d_attention_input + grad_output
+```
+
+Returverdien `d_embedded` beskriver dermed hvordan alle embedding-vektorene
+påvirket loss gjennom begge veiene.
 
 `d_embedded` blir dermed `grad_output` til embedding-lagets `backward`.
 

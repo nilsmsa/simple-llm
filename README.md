@@ -7,6 +7,7 @@ Modellen inneholder:
 - ord- og BPE-tokenisering
 - trenbare embedding-vektorer
 - causal self-attention
+- residualforbindelse rundt attention-laget
 - et lineært output-lag
 - cross-entropy og backpropagation
 - oppdatering av vekter med SGD

@@ -135,14 +135,24 @@ i            synlig   synlig  synlig  synlig
 
 Softmax gjør de synlige scorene om til attention-sannsynligheter. Den siste posisjonen, `i`, kan hente informasjon fra alle fire tokens.
 
-### 4.4 Context-vektor
+### 4.4 Context-vektor og residualforbindelse
 
 Attention-sannsynlighetene brukes til å blande value-vektorene. Resultatet er én ny vektor per token.
 
-Bare den siste context-vektoren brukes videre:
+Deretter legges attention-resultatet sammen med den opprinnelige
+embedding-vektoren på samme posisjon:
 
 ```text
-context-vektor for i -> 8 tall
+output = attention(input) + input
+```
+
+Dette er en residualforbindelse. Attention-grenen tilfører informasjon fra
+andre tokens, mens den direkte veien bevarer tokenets egen representasjon.
+
+Bare den siste, sammenslåtte context-vektoren brukes videre:
+
+```text
+attention-vektor for i + embedding for i -> 8 tall
 ```
 
 Denne vektoren skal inneholde informasjonen modellen trenger for å svare på:
@@ -204,7 +214,21 @@ første tall:
 andre tall:
 0.4×0.1 + 0.2×0.4 + 0.1×0.3 + 0.3×(-0.2) = 0.09
 
-context = [0.46, 0.09]
+attention-resultat = [0.46, 0.09]
+```
+
+Anta at embedding-vektoren til siste token, `i`, er:
+
+```text
+input = [0.10, -0.05]
+```
+
+Residualforbindelsen gir da:
+
+```text
+context = attention-resultat + input
+        = [0.46, 0.09] + [0.10, -0.05]
+        = [0.56, 0.04]
 ```
 
 ### 5.2 Output-laget velger feil fylke
@@ -221,21 +245,21 @@ Hver logit er dot product mellom context og tokenets output-vekt:
 
 ```text
 vestland:
-0.46×1.0 + 0.09×0.5 = 0.505
+0.56×1.0 + 0.04×0.5 = 0.580
 
 trøndelag:
-0.46×1.2 + 0.09×0.1 = 0.561  <- høyest, men feil
+0.56×1.2 + 0.04×0.1 = 0.676  <- høyest, men feil
 
 troms:
-0.46×(-0.2) + 0.09×0.3 = -0.065
+0.56×(-0.2) + 0.04×0.3 = -0.100
 ```
 
 Softmax gir omtrent:
 
 ```text
-vestland:   0.381
-trøndelag:  0.403
-troms:      0.216
+vestland:   0.384
+trøndelag:  0.422
+troms:      0.194
 ```
 
 Target er one-hot:
@@ -249,7 +273,7 @@ troms:      0
 Cross-entropy-loss for dette svaret ville vært omtrent:
 
 ```text
--ln(0.381) = 0.965
+-ln(0.384) = 0.958
 ```
 
 `train_model` beregner ikke dette tallet i hver runde. Tallet er nyttig for å måle fremgang, men vektoppdateringen trenger bare gradienten som beregnes i neste steg.
@@ -265,9 +289,9 @@ grad_logits = sannsynlighet - target
 Dermed får vi:
 
 ```text
-vestland:   0.381 - 1 = -0.619
-trøndelag:  0.403 - 0 =  0.403
-troms:      0.216 - 0 =  0.216
+vestland:   0.384 - 1 = -0.616
+trøndelag:  0.422 - 0 =  0.422
+troms:      0.194 - 0 =  0.194
 ```
 
 Dette er `grad_output` til `LinearLayer::backward`.
@@ -289,7 +313,7 @@ grad_logit × context-verdi
 For `vestland`:
 
 ```text
-[-0.619×0.46, -0.619×0.09] = [-0.285, -0.056]
+[-0.616×0.56, -0.616×0.04] = [-0.345, -0.025]
 ```
 
 SGD-oppdateringen er:
@@ -301,8 +325,8 @@ ny vekt = gammel vekt - learning_rate × gradient
 Med `learning_rate=0.05` blir `vestland`-vektene:
 
 ```text
-[1.0, 0.5] - 0.05×[-0.285, -0.056]
-= [1.014, 0.503]
+[1.0, 0.5] - 0.05×[-0.345, -0.025]
+= [1.017, 0.501]
 ```
 
 Begge vektene øker. Den samme context-vektoren vil derfor gi `vestland` en høyere logit neste gang.
@@ -311,11 +335,11 @@ For `trøndelag`:
 
 ```text
 gradient:
-[0.403×0.46, 0.403×0.09] = [0.185, 0.036]
+[0.422×0.56, 0.422×0.04] = [0.236, 0.017]
 
 nye vekter:
-[1.2, 0.1] - 0.05×[0.185, 0.036]
-= [1.191, 0.098]
+[1.2, 0.1] - 0.05×[0.236, 0.017]
+= [1.188, 0.099]
 ```
 
 Vektene reduseres, slik at `trøndelag` får en lavere logit i en lignende context.
@@ -332,12 +356,12 @@ Med vektene fra før oppdateringen:
 
 ```text
 første tall:
-1.0×(-0.619) + 1.2×0.403 + (-0.2)×0.216 = -0.178
+1.0×(-0.616) + 1.2×0.422 + (-0.2)×0.194 = -0.148
 
 andre tall:
-0.5×(-0.619) + 0.1×0.403 + 0.3×0.216 = -0.204
+0.5×(-0.616) + 0.1×0.422 + 0.3×0.194 = -0.208
 
-grad_context = [-0.178, -0.204]
+grad_context = [-0.148, -0.208]
 ```
 
 Dette er returverdien `d_last_token` fra `LinearLayer::backward`.
@@ -350,16 +374,16 @@ Context-vektoren var et vektet gjennomsnitt av values. Derfor får hver value-ve
 
 ```text
 bergen:
-0.4×[-0.178, -0.204] = [-0.071, -0.082]
+0.4×[-0.148, -0.208] = [-0.059, -0.083]
 
 kommune:
-0.2×[-0.178, -0.204] = [-0.036, -0.041]
+0.2×[-0.148, -0.208] = [-0.030, -0.042]
 
 ligger:
-0.1×[-0.178, -0.204] = [-0.018, -0.020]
+0.1×[-0.148, -0.208] = [-0.015, -0.021]
 
 i:
-0.3×[-0.178, -0.204] = [-0.053, -0.061]
+0.3×[-0.148, -0.208] = [-0.044, -0.062]
 ```
 
 `bergen` får størst gradient fordi attention ga tokenet størst betydning i forward pass.
@@ -380,12 +404,22 @@ Vekten øker fordi den bidro i en retning som bør forsterkes.
 
 ## 10. Embedding-vektene endres
 
-Query, key og value ble alle beregnet fra embedding-vektorene. Gradientene fra de tre veiene summeres derfor til `d_embedded`.
-
-Anta at de to første tallene i embedding for `bergen` var:
+Query, key og value ble alle beregnet fra embedding-vektorene. Gradientene fra
+de tre attention-veiene summeres derfor. Residualforbindelsen gir i tillegg en
+direkte vei fra outputen tilbake til embedding-inputen:
 
 ```text
-[0.70, 0.10]
+d_embedded = d_attention_input + grad_output
+```
+
+Den direkte gradienten er nødvendig fordi forward pass la sammen
+attention-resultatet og input. For posisjonen `i` er `grad_output` lik
+`grad_context`, fordi output-laget bare brukte den siste posisjonen.
+
+Anta at embedding for `i` var:
+
+```text
+[0.10, -0.05]
 ```
 
 Og at samlet gradient fra query, key og value ble:
@@ -394,14 +428,22 @@ Og at samlet gradient fra query, key og value ble:
 [-0.03, 0.08]
 ```
 
+Når residualgradienten legges til, blir totalen:
+
+```text
+[-0.03, 0.08] + [-0.148, -0.208] = [-0.178, -0.128]
+```
+
 Oppdateringen blir:
 
 ```text
-[0.70, 0.10] - 0.05×[-0.03, 0.08]
-= [0.702, 0.096]
+[0.10, -0.05] - 0.05×[-0.178, -0.128]
+= [0.109, -0.044]
 ```
 
-Embedding for `bergen` er nå litt bedre tilpasset prediksjonen av `vestland` i denne contexten.
+Embedding for `i` er nå litt bedre tilpasset prediksjonen av `vestland` i
+denne contexten. Tidligere posisjoner får fortsatt gradient gjennom
+attention-grenen, men ikke gjennom residualveien fra den siste posisjonen.
 
 Etter oppdateringen nullstilles alle gradients. Neste sliding window starter et nytt forward pass med de nye vektene.
 
@@ -417,6 +459,21 @@ bodø      ... -> nordland
 ```
 
 Modellen lærer ikke en regel om norsk geografi. Den justerer 400 tall slik at riktig fylke får høyest logit etter de observerte contextene.
+
+Residualforbindelsen endrer ikke antall parametere. Den gjør informasjonsflyten
+enklere: Attention trenger ikke både å hente relevant historikk og gjenskape
+hele representasjonen av det aktuelle tokenet. I denne demoen gjør det at
+modellen ikke bare predikerer første riktige token:
+
+```text
+før:   bergen ligger i -> vestland + videre, usammenhengende tekst
+etter: bergen ligger i -> vestland fylke. + videre, usammenhengende tekst
+```
+
+Etter `vestland` bevares representasjonen av dette tokenet direkte inn i
+output-laget. Modellen klarer derfor også den trente overgangen
+`vestland -> fylke -> .`. Resten kan fortsatt bli usammenhengende fordi
+modellen ikke har et stopptoken og alltid genererer 50 nye tokens.
 
 ## 12. Prediksjonsloopen
 
