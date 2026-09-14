@@ -3,21 +3,12 @@ use std::{
     io::{self, BufReader, Read},
 };
 
-use crate::{
-    arguments::{Args, TokenizerKind},
+use simple_llm::{
+    arguments::{self, Args, TokenizerKind},
+    multi_train,
     tokenizer::Tokenizer,
     word_tokenizer::WordTokenizer,
 };
-
-pub mod arguments;
-pub mod bpe_tokenizer;
-pub mod embedding_layer;
-pub mod linear_layer;
-pub mod multi_train;
-pub mod self_attatention_layer;
-pub mod sliding_window;
-pub mod tokenizer;
-pub mod word_tokenizer;
 
 fn main() {
     multi_file_demo();
@@ -64,10 +55,51 @@ fn train_and_predict<T: Tokenizer>(tokenizer: T, args: &Args, training_text: &st
     println!("  Output: {}", parameters.output);
     multi_train::train_model(&mut model, training_text, args.learning_rate, args.epochs);
     println!("Prompt: '{}'", args.prompt);
-    println!(
-        "Predicted: '{}'",
-        multi_train::predict_tokens(&mut model, &args.prompt, 50)
-    );
+    if args.trace {
+        let (predicted, trace) =
+            multi_train::predict_tokens_with_trace(&mut model, &args.prompt, 50, 3, 3);
+        print_prediction_trace(&model, &trace);
+        println!("Predicted: '{predicted}'");
+    } else {
+        println!(
+            "Predicted: '{}'",
+            multi_train::predict_tokens(&mut model, &args.prompt, 50)
+        );
+    }
+}
+
+/// Skriver kandidatene uten å fremstille token-sannsynlighet som sannhet.
+fn print_prediction_trace<T: Tokenizer>(
+    model: &multi_train::Model<T>,
+    trace: &[multi_train::PredictionStep],
+) {
+    println!("Prediction trace:");
+    for (step_index, step) in trace.iter().enumerate() {
+        println!(
+            "Step {} context: '{}'",
+            step_index + 1,
+            model.tokenizer.decode(&step.context_tokens)
+        );
+        let shown_probability: f32 = step
+            .candidates
+            .iter()
+            .map(|candidate| candidate.probability)
+            .sum();
+        for candidate in &step.candidates {
+            println!(
+                "  '{}': {:.6}",
+                model.tokenizer.decode(&[candidate.token_id]),
+                candidate.probability
+            );
+        }
+        if step.candidates.len() < model.vocab_size {
+            println!("  other tokens: {:.6}", (1.0 - shown_probability).max(0.0));
+        }
+        println!(
+            "  selected with argmax: '{}'",
+            model.tokenizer.decode(&[step.selected_token_id])
+        );
+    }
 }
 
 /// Kobler flere treningsfiler sammen til én sammenhengende tekststrøm.

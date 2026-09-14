@@ -17,23 +17,13 @@ Koden implementerer en enkel autoregressiv språkmodell:
 cargo test --quiet
 ```
 
-Kommandoen rapporterer 106 beståtte testkjøringer. Testene for `linear_layer` og `self_attatention_layer` sammenligner `backward()` med numeriske gradienter beregnet med finite differences. De gjentar derfor ikke bare formlene i implementasjonen.
+Testene for `linear_layer` og `self_attatention_layer` sammenligner `backward()` med numeriske gradienter beregnet med finite differences. De gjentar derfor ikke bare formlene i implementasjonen.
 
 Testene bekrefter også at samme `seed` gir identiske vekter og prediksjoner, mens ulike seeds gir ulike startvekter.
 
 ## Loss synker under trening
 
-Modellen ble trent på [`verifikasjon_test_data.txt`](./verifikasjon_test_data.txt) med `seed=42`, `d-model=8`, `seq-len=3` og `learning-rate=0.05`.
-
-| Epoch | Gjennomsnittlig cross-entropy-loss |
-|------:|-----------------------------------:|
-| 0 | 1.6059653 |
-| 5 | 0.76554537 |
-| 10 | 0.4641654 |
-| 15 | 0.20894644 |
-| 19 | 0.16499466 |
-
-Denne separate målingen viser at loss synker når gradient descent forbedrer vektene. `train_model` beregner gradienten direkte og trenger ikke selve loss-tallet for å oppdatere vektene.
+Testen `training_reduces_next_token_loss` måler cross-entropy-loss for den samme contexten før og etter trening. Den bekrefter at loss blir lavere med fast seed og treningsdata. `train_model` beregner gradienten direkte og trenger ikke selve loss-tallet for å oppdatere vektene.
 
 ## Attention bruker tidligere kontekst
 
@@ -43,7 +33,7 @@ Testdataene inneholder dette mønsteret:
 the cat sat on the mat. the dog sat on the rug.
 ```
 
-Et kort kontekstvindu ser bare den tvetydige frasen `sat on the`:
+Et kort context-vindu ser bare den tvetydige frasen `sat on the`:
 
 ```bash
 cargo run --release -- \
@@ -71,13 +61,13 @@ cargo run --release -- \
   "the cat sat on the"
 ```
 
-Det første nye tokenet blir `mat`. Modellen bruker dermed informasjon fra tidligere i konteksten, ikke bare siste token.
+Det første nye tokenet blir `mat`. Modellen bruker dermed informasjon fra tidligere i contexten, ikke bare siste token.
 
-Med vocabulary på 9 tokens og `d-model=8` har modellen 336 trenbare parametere:
+Med vocabulary på 8 tokens og `d-model=8` har modellen 320 trenbare parametere:
 
-- embedding: 72
+- embedding: 64
 - attention: 192
-- output: 72
+- output: 64
 
 ## Vurdering
 
@@ -86,7 +76,8 @@ Verifikasjonen viser at:
 - gradientene stemmer med finite differences
 - loss synker under trening
 - modellen lærer å predikere neste token
-- attention kan bruke tidligere tokens i konteksten
+- attention kan bruke tidligere tokens i contexten
 - samme seed gir reproduserbare resultater
+- trace rangerer kandidater med softmax og velger høyeste verdi med `argmax`
 
-Modellen er med vilje begrenset. Den mangler blant annet positional encoding, multi-head attention, feed-forward-lag, batching og stopptoken.
+Modellen er med vilje begrenset. Den mangler blant annet positional encoding, layer normalization, multi-head attention, feed-forward-lag, stablede transformerblokker, batching og stopptoken.

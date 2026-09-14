@@ -1,3 +1,6 @@
+use rand::Rng;
+use rand_distr::{Distribution, Normal};
+
 pub struct AttentionCache {
     pub input: Vec<f32>,
     pub q: Vec<f32>,
@@ -22,13 +25,19 @@ impl SelfAttentionLayer {
     ///
     /// De tre rollene lar modellen lære hva et token leter etter, hva det
     /// tilbyr som kontekst, og hvilken informasjon som skal sendes videre.
-    pub fn new(d_model: usize) -> Self {
+    pub fn new<R: Rng + ?Sized>(d_model: usize, rng: &mut R) -> Self {
         let size = d_model * d_model;
+        let normal = Normal::new(0.0, 0.01).expect("standard deviation is positive");
+        let mut random_weights = || {
+            (0..size)
+                .map(|_| normal.sample(rng) as f32)
+                .collect::<Vec<_>>()
+        };
         Self {
             d_model,
-            w_q: vec![0.01; size],
-            w_k: vec![0.01; size],
-            w_v: vec![0.01; size],
+            w_q: random_weights(),
+            w_k: random_weights(),
+            w_v: random_weights(),
             wq_gradients: vec![0.0; size],
             wk_gradients: vec![0.0; size],
             wv_gradients: vec![0.0; size],
@@ -42,94 +51,19 @@ impl SelfAttentionLayer {
     /// får. Disse vektene brukes til å blande value-vektorene til ny kontekst.
     pub fn forward(&mut self, input: &[f32], seq_len: usize) -> Vec<f32> {
         let model_width = self.d_model;
-        let mut queries = vec![0.0; seq_len * model_width];
-        let mut keys = vec![0.0; seq_len * model_width];
-        let mut values = vec![0.0; seq_len * model_width];
+        let queries = project_role(input, &self.w_q, seq_len, model_width);
+        let keys = project_role(input, &self.w_k, seq_len, model_width);
+        let values = project_role(input, &self.w_v, seq_len, model_width);
 
-        matmul(
-            input,
-            &self.w_q,
-            &mut queries,
-            seq_len,
-            model_width,
-            model_width,
-            false,
-            false,
-        );
-        matmul(
-            input,
-            &self.w_k,
-            &mut keys,
-            seq_len,
-            model_width,
-            model_width,
-            false,
-            false,
-        );
-        matmul(
-            input,
-            &self.w_v,
-            &mut values,
-            seq_len,
-            model_width,
-            model_width,
-            false,
-            false,
-        );
+        let mut probs = compute_scores(&queries, &keys, seq_len, model_width);
+        apply_causal_mask(&mut probs, seq_len);
+        softmax_rows(&mut probs, seq_len);
 
-        let mut scores = vec![0.0; seq_len * seq_len];
-        matmul(
-            &queries,
-            &keys,
-            &mut scores,
-            seq_len,
-            seq_len,
-            model_width,
-            false,
-            true,
-        );
-
-        let scale = (model_width as f32).sqrt();
-        for score in &mut scores {
-            *score /= scale;
-        }
-
-        apply_casual_mask(&mut scores, seq_len);
-
-        let mut probs = vec![0.0; seq_len * seq_len];
-        for query_index in 0..seq_len {
-            let row_start = query_index * seq_len;
-            let mut max_val = f32::NEG_INFINITY;
-            for key_index in 0..seq_len {
-                if scores[row_start + key_index] > max_val {
-                    max_val = scores[row_start + key_index];
-                }
-            }
-            let mut sum = 0.0;
-            for key_index in 0..seq_len {
-                probs[row_start + key_index] = (scores[row_start + key_index] - max_val).exp();
-                sum += probs[row_start + key_index];
-            }
-            for key_index in 0..seq_len {
-                probs[row_start + key_index] /= sum;
-            }
-        }
-
-        let mut context_sequence = vec![0.0; seq_len * model_width];
-        matmul(
-            &probs,
-            &values,
-            &mut context_sequence,
-            seq_len,
-            model_width,
-            seq_len,
-            false,
-            false,
-        );
+        let mut context_sequence = mix_values(&probs, &values, seq_len, model_width);
 
         // Bevar tokenets egen embedding ved å legge den til attention-resultatet.
-        for i in 0..context_sequence.len() {
-            context_sequence[i] += input[i];
+        for (context_value, input_value) in context_sequence.iter_mut().zip(input) {
+            *context_value += input_value;
         }
         self.cache = Some(AttentionCache {
             input: input.to_vec(),
@@ -331,8 +265,9 @@ pub fn project_role(input: &[f32], weights: &[f32], seq_len: usize, d_model: usi
 
 /// Måler hvor relevant hvert key-token er for hvert query-token.
 ///
-/// Dot product gir høy score til vektorer som peker i samme retning. Skalering
-/// med kvadratroten av `d_model` holder tallene i et stabilt område.
+/// Dot product gir høy score når vektorene både peker i samme retning og har
+/// stor størrelse. Skalering med kvadratroten av `d_model` holder tallene i et
+/// stabilt område.
 pub fn compute_scores(queries: &[f32], keys: &[f32], seq_len: usize, d_model: usize) -> Vec<f32> {
     let mut scores = vec![0.0; seq_len * seq_len];
     let scale = (d_model as f32).sqrt();
@@ -380,7 +315,7 @@ pub fn mix_values(
 /// Skjuler framtidige tokens, slik at modellen ikke kan se fasiten.
 ///
 /// Dette gjør attention causal og er nødvendig for ærlig neste-token-trening.
-pub fn apply_casual_mask(scores: &mut [f32], seq_len: usize) {
+pub fn apply_causal_mask(scores: &mut [f32], seq_len: usize) {
     for row in 0..seq_len {
         for col in 0..seq_len {
             if col > row {
@@ -429,6 +364,7 @@ pub fn softmax_rows(scores: &mut [f32], seq_len: usize) {
 ///
 /// Transpose-flaggene gjør at samme hjelpefunksjon kan brukes i både forward
 /// pass og backpropagation. Resultatet legges til eksisterende verdier i `c`.
+#[allow(clippy::too_many_arguments)]
 pub fn matmul(
     a: &[f32],
     b: &[f32],
@@ -463,12 +399,14 @@ pub fn matmul(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rand::{SeedableRng, rngs::StdRng};
 
     const TOLERANCE: f32 = 1e-5;
 
     #[test]
     fn new_creates_usable_projection_matrices_with_the_expected_shape() {
-        let mut layer = SelfAttentionLayer::new(3);
+        let mut rng = StdRng::seed_from_u64(42);
+        let mut layer = SelfAttentionLayer::new(3, &mut rng);
 
         assert_eq!(layer.d_model, 3);
         assert_eq!(layer.w_q.len(), 9);
@@ -505,10 +443,10 @@ mod tests {
     }
 
     #[test]
-    fn apply_casual_mask_blocks_attention_to_future_tokens() {
+    fn apply_causal_mask_blocks_attention_to_future_tokens() {
         let mut scores = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0];
 
-        apply_casual_mask(&mut scores, 3);
+        apply_causal_mask(&mut scores, 3);
 
         assert_eq!(
             scores,
@@ -533,7 +471,7 @@ mod tests {
         softmax_rows(&mut scores, 2);
 
         assert_float_slices_eq(&scores, &[1.0, 0.0, 0.5, 0.5], TOLERANCE);
-        for row in scores.chunks_exact(2) {
+        for row in scores.chunks(2) {
             assert!((row.iter().sum::<f32>() - 1.0).abs() < TOLERANCE);
         }
     }
@@ -674,7 +612,8 @@ mod tests {
     #[test]
     #[should_panic]
     fn backward_requires_a_forward_pass() {
-        SelfAttentionLayer::new(2).backward(&[0.0; 4]);
+        let mut rng = StdRng::seed_from_u64(42);
+        SelfAttentionLayer::new(2, &mut rng).backward(&[0.0; 4]);
     }
 
     #[derive(Clone, Copy)]

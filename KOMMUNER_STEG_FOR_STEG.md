@@ -6,6 +6,7 @@ Kommandoen er:
 
 ```bash
 cargo run --release -- \
+  -trace \
   -tokenizer=word \
   -seed=42 \
   -epochs=3000 \
@@ -60,7 +61,7 @@ Modellen får 400 trenbare parametere:
 | Output | `13 × 8` | 104 |
 | **Totalt** | | **400** |
 
-Embedding- og output-vektene initialiseres tilfeldig med `seed=42`. Query-, key- og value-vektene starter på `0.01`.
+Embedding-, query-, key-, value- og output-vektene initialiseres med reproduserbare tilfeldige verdier. Query, key og value får forskjellige trekk fra samme fordeling. De bruker en egen RNG-strøm avledet fra `seed=42` for at attention-initialiseringen ikke skal forskyve startverdiene i embedding- og output-laget.
 
 ## 3. Sliding windows lager treningseksempler
 
@@ -187,7 +188,7 @@ Tallene er pedagogiske eksempelverdier, ikke en utskrift av vektene fra `seed=42
 
 ### 5.1 Attention blander values
 
-Anta at siste token gir disse attention-sannsynlighetene:
+Anta at det siste tokenet gir disse attention-sannsynlighetene:
 
 ```text
 bergen:   0.4
@@ -217,7 +218,7 @@ andre tall:
 attention-resultat = [0.46, 0.09]
 ```
 
-Anta at embedding-vektoren til siste token, `i`, er:
+Anta at embedding-vektoren til det siste tokenet, `i`, er:
 
 ```text
 input = [0.10, -0.05]
@@ -507,8 +508,12 @@ Tokenizeren lager:
 Med `seed=42` og de dokumenterte parameterne er høyeste logit token 4:
 
 ```text
-4 -> vestland
+vestland: 0.999992  <- valgt med argmax
+troms:    0.000005
+nordland: 0.000002
 ```
+
+Verdiene er softmax-sannsynligheter avrundet til seks desimaler. De rangerer neste token, men måler ikke om svaret er sant.
 
 Tokenet legges til context:
 
@@ -526,7 +531,27 @@ Hele den nye sekvensen kjøres gjennom modellen igjen:
 
 Modellen beregner nye embeddings, ny attention og nye logits. Det valgte tokenet legges til listen.
 
-### Runde 3 til 50
+Trace viser:
+
+```text
+fylke:    0.999955  <- valgt med argmax
+vestland: 0.000044
+i:        0.000002
+```
+
+### Runde 3
+
+Etter `fylke` rangerer modellen punktum høyest:
+
+```text
+.:         0.999982  <- valgt med argmax
+fylke:     0.000017
+trondheim: 0.000001
+```
+
+Den relevante fullføringen er nå `vestland fylke.`.
+
+### Runde 4 til 50
 
 Prosessen gjentas:
 

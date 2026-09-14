@@ -1,7 +1,7 @@
 use crate::{
     bpe_tokenizer::{build_tokenizer, train},
     embedding_layer::EmbeddingLayer,
-    linear_layer::{LinearLayer, cross_entropy_derivative},
+    linear_layer::{LinearLayer, cross_entropy_derivative, softmax},
     self_attatention_layer::SelfAttentionLayer,
     sliding_window::sliding_windows,
     tokenizer::Tokenizer,
@@ -30,7 +30,8 @@ pub fn build_model<T: Tokenizer>(
     let vocab_size = tokenizer.vocab_size();
     let mut rng = StdRng::seed_from_u64(seed);
     let embedding = EmbeddingLayer::new(vocab_size, d_model, &mut rng);
-    let attention = SelfAttentionLayer::new(d_model);
+    let mut attention_rng = StdRng::seed_from_u64(seed.wrapping_add(1));
+    let attention = SelfAttentionLayer::new(d_model, &mut attention_rng);
     let linear = LinearLayer::new(vocab_size, d_model, &mut rng);
 
     Model {
@@ -102,33 +103,48 @@ pub fn predict_tokens<T: Tokenizer>(
     prompt: &str,
     max_new_tokens: usize,
 ) -> String {
+    generate_tokens(model, prompt, max_new_tokens, 0, 0).0
+}
+
+/// Genererer tekst og samler de høyest rangerte tokenene for de første stegene.
+pub fn predict_tokens_with_trace<T: Tokenizer>(
+    model: &mut Model<T>,
+    prompt: &str,
+    max_new_tokens: usize,
+    trace_steps: usize,
+    top_k: usize,
+) -> (String, Vec<PredictionStep>) {
+    generate_tokens(model, prompt, max_new_tokens, trace_steps, top_k)
+}
+
+fn generate_tokens<T: Tokenizer>(
+    model: &mut Model<T>,
+    prompt: &str,
+    max_new_tokens: usize,
+    trace_steps: usize,
+    top_k: usize,
+) -> (String, Vec<PredictionStep>) {
     let mut current_tokens = model.tokenizer.encode(prompt);
+    let mut trace = Vec::with_capacity(trace_steps.min(max_new_tokens));
 
     if current_tokens.is_empty() {
         current_tokens.push(0);
     }
 
     for _ in 0..max_new_tokens {
-        // Get embedded sequences
-        let mut embedded_sequence =
-            Vec::with_capacity(current_tokens.len() * model.embedding.d_model);
-        for &token_id in &current_tokens {
-            let token_vector = model.embedding.forward(token_id);
-            embedded_sequence.extend_from_slice(token_vector);
-        }
-
-        let context_aware = model
-            .attention
-            .forward(&embedded_sequence, current_tokens.len());
-        let start_idx = (current_tokens.len() - 1) * model.d_model;
-        let last_token_vector = &context_aware[start_idx..start_idx + model.d_model];
-
-        let logits = model.linear.forward(last_token_vector);
+        let logits = forward(model, &current_tokens);
         let next_token_id = argmax(&logits);
 
+        if trace.len() < trace_steps {
+            trace.push(PredictionStep {
+                context_tokens: current_tokens.clone(),
+                candidates: top_predictions(&logits, top_k),
+                selected_token_id: next_token_id,
+            });
+        }
         current_tokens.push(next_token_id);
     }
-    model.tokenizer.decode(&current_tokens)
+    (model.tokenizer.decode(&current_tokens), trace)
 }
 
 /// Kjører ett forward pass og returnerer logits for neste token.
@@ -169,6 +185,40 @@ fn argmax(logits: &[f32]) -> u32 {
         }
     }
     best_index as u32
+}
+
+/// Ett observert genereringssteg med context, kandidater og valgt token.
+#[derive(Debug, PartialEq)]
+pub struct PredictionStep {
+    pub context_tokens: Vec<u32>,
+    pub candidates: Vec<TokenPrediction>,
+    pub selected_token_id: u32,
+}
+
+/// Ett token og modellens softmax-sannsynlighet for neste posisjon.
+#[derive(Debug, PartialEq)]
+pub struct TokenPrediction {
+    pub token_id: u32,
+    pub probability: f32,
+}
+
+/// Rangerer de mest sannsynlige neste tokenene.
+pub fn top_predictions(logits: &[f32], limit: usize) -> Vec<TokenPrediction> {
+    let probabilities = softmax(logits);
+    let mut token_ids: Vec<_> = (0..logits.len()).collect();
+    token_ids.sort_by(|&left, &right| {
+        logits[right]
+            .total_cmp(&logits[left])
+            .then_with(|| left.cmp(&right))
+    });
+    token_ids.truncate(limit.min(token_ids.len()));
+    token_ids
+        .into_iter()
+        .map(|token_id| TokenPrediction {
+            token_id: token_id as u32,
+            probability: probabilities[token_id],
+        })
+        .collect()
 }
 
 pub struct Model<T: Tokenizer> {
@@ -213,6 +263,7 @@ impl<T: Tokenizer> Model<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::linear_layer::cross_entropy_loss;
     use crate::word_tokenizer::WordTokenizer;
 
     #[test]
@@ -241,6 +292,12 @@ mod tests {
         let second = build_model(WordTokenizer::build("one two three"), 4, 2, 2);
 
         assert_ne!(first.embedding.weights, second.embedding.weights);
+        assert_ne!(first.attention.w_q, second.attention.w_q);
+        assert_ne!(first.attention.w_k, second.attention.w_k);
+        assert_ne!(first.attention.w_v, second.attention.w_v);
+        assert_ne!(first.attention.w_q, first.attention.w_k);
+        assert_ne!(first.attention.w_q, first.attention.w_v);
+        assert_ne!(first.attention.w_k, first.attention.w_v);
         assert_ne!(first.linear.weights, second.linear.weights);
     }
 
@@ -259,5 +316,71 @@ mod tests {
             }
         );
         assert_eq!(counts.total(), 72);
+    }
+
+    #[test]
+    fn top_predictions_sorts_probabilities_and_preserves_total_mass() {
+        let predictions = top_predictions(&[0.0, 3.0_f32.ln(), 0.0], 3);
+
+        assert_eq!(
+            predictions
+                .iter()
+                .map(|prediction| prediction.token_id)
+                .collect::<Vec<_>>(),
+            vec![1, 0, 2]
+        );
+        assert!((predictions.iter().map(|item| item.probability).sum::<f32>() - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn traced_prediction_records_context_candidates_and_argmax_choice() {
+        let training_data = "one two three. one two three.";
+        let mut model = build_model(WordTokenizer::build(training_data), 4, 2, 42);
+
+        let (_, trace) = predict_tokens_with_trace(&mut model, "one two", 2, 1, 3);
+
+        assert_eq!(trace.len(), 1);
+        assert_eq!(trace[0].context_tokens, vec![0, 1]);
+        assert_eq!(trace[0].selected_token_id, trace[0].candidates[0].token_id);
+        let shown_probability = trace[0]
+            .candidates
+            .iter()
+            .map(|candidate| candidate.probability)
+            .sum::<f32>();
+        assert!(shown_probability <= 1.0 + f32::EPSILON);
+    }
+
+    #[test]
+    fn training_reduces_next_token_loss() {
+        let training_data = "one two three. one two three. one two three.";
+        let mut model = build_model(WordTokenizer::build(training_data), 4, 2, 42);
+        let context = model.tokenizer.encode("one two");
+        let target_id = model.tokenizer.encode("three")[0] as usize;
+
+        let loss_before = target_loss(&mut model, &context, target_id);
+        train_model(&mut model, training_data, 0.01, 100);
+        let loss_after = target_loss(&mut model, &context, target_id);
+
+        assert!(
+            loss_after < loss_before,
+            "expected training to reduce loss from {loss_before}, got {loss_after}"
+        );
+    }
+
+    #[test]
+    fn municipality_demo_completes_county_and_period() {
+        let training_data = include_str!("../kommuner_demo.txt");
+        let mut model = build_model(WordTokenizer::build(training_data), 8, 4, 42);
+
+        train_model(&mut model, training_data, 0.05, 100);
+        let prediction = predict_tokens(&mut model, "bergen ligger i", 3);
+
+        assert_eq!(prediction, "bergen ligger i vestland fylke.");
+    }
+
+    fn target_loss<T: Tokenizer>(model: &mut Model<T>, context: &[u32], target_id: usize) -> f32 {
+        let logits = forward(model, context);
+        let target = create_target(&logits, target_id);
+        cross_entropy_loss(&logits, &target)
     }
 }

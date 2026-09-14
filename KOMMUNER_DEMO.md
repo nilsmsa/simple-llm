@@ -20,6 +20,7 @@ Den korte teksten forekommer ikke i treningsfilen.
 
 ```bash
 cargo run --release -- \
+  -trace \
   -tokenizer=word \
   -seed=42 \
   -epochs=3000 \
@@ -30,7 +31,7 @@ cargo run --release -- \
   "bergen ligger i"
 ```
 
-Relevante linjer i output:
+Relevante, forkortede linjer i output:
 
 ```text
 Vocab size: 13
@@ -38,8 +39,25 @@ Trainable parameters: 400
   Embedding: 104
   Attention (Q, K, V): 192
   Output: 104
+Prediction trace:
+Step 1 context: 'bergen ligger i'
+  'vestland': 0.999992
+  'troms': 0.000005
+  'nordland': 0.000002
+  other tokens: 0.000000
+  selected with argmax: 'vestland'
+Step 2 context: 'bergen ligger i vestland'
+  'fylke': 0.999955
+  ...
+  selected with argmax: 'fylke'
+Step 3 context: 'bergen ligger i vestland fylke'
+  '.': 0.999982
+  ...
+  selected with argmax: '.'
 Predicted: 'bergen ligger i vestland fylke. trondheim kommune ...'
 ```
+
+Verdiene er avrundet til seks desimaler. De beskriver sannsynligheten for neste token innenfor modellens vocabulary, ikke sannsynligheten for at en geografisk påstand er sann. `argmax` velger alltid kandidaten med høyest verdi; det finnes ingen egen «ukjent»-handling.
 
 Den relevante fullføringen har dermed endret seg slik:
 

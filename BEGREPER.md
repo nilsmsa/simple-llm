@@ -18,6 +18,21 @@ tekst
   -> oppdaterte vekter
 ```
 
+Enda mer forenklet:
+
+```text
+bygg vocabulary -> gi modellen startvekter -> gjett neste token
+-> sammenlign med fasit -> juster vektene litt -> gjenta mange ganger
+```
+
+| Denne modellen viser | Pedagogisk forenkling | Moderne decoder-only LLM |
+|----------------------|-----------------------|--------------------------|
+| Neste-token-trening | Én fasit per sliding window | Loss for mange posisjoner parallelt |
+| Causal self-attention | Ett attention-hode og ett lag | Mange hoder og stablede lag |
+| Residualforbindelse | Ingen layer normalization | Residualer kombinert med normalisering |
+| Token-embeddings | Ingen posisjonsrepresentasjon | Lært posisjon eller for eksempel RoPE |
+| Autoregressiv generering | Deterministisk `argmax` | Ofte sampling, instruksjonstrening og flere stoppregler |
+
 ## 1. Tekst blir treningseksempler
 
 ### Token og vocabulary
@@ -51,6 +66,8 @@ context                              target
 ```
 
 Vinduet flyttes ett token om gangen. Én tekst gir derfor mange treningseksempler.
+
+Denne modellen beregner loss for bare target-tokenet i hvert vindu. Moderne transformertrening bruker vanligvis samme prinsipp på mange posisjoner parallelt. Ett target om gangen er tregere, men gjør dataflyten enklere å følge.
 
 ## 2. Embedding gjør tokens om til vektorer
 
@@ -92,7 +109,7 @@ value = hva sender jeg videre?
 
 ### Attention-score
 
-`compute_scores` sammenligner hver query med hver key ved hjelp av dot product. Vektorer som peker i samme retning, får høy score.
+`compute_scores` sammenligner hver query med hver key ved hjelp av dot product. Scoren påvirkes av både hvor godt vektorene er rettet inn mot hverandre, og hvor store de er.
 
 Scoren deles på kvadratroten av `d_model`. Denne skaleringen hindrer at større vektorer gir svært store tall og ustabil softmax.
 
@@ -101,6 +118,12 @@ Scoren deles på kvadratroten av `d_model`. Denne skaleringen hindrer at større
 Modellen skal predikere framtidige tokens uten å se dem. En causal mask setter scoren til alle framtidige posisjoner til minus uendelig.
 
 Et token kan dermed bare bruke seg selv og tokens som står tidligere i teksten. Uten masken kunne modellen ha sett fasiten under trening.
+
+I denne konkrete treningsløkken brukes bare outputen ved siste posisjon, som allerede kan se hele contexten. Masken endrer derfor ikke denne ene outputen, men den gjør attention-laget causal for alle posisjoner og demonstrerer prinsippet moderne decoder-modeller bruker.
+
+### Manglende posisjonsinformasjon
+
+Modellen legger ikke til positional encoding. Attention kan derfor oppdage hvilke tidligere tokens som finnes, men ikke generelt skille rekkefølgen mellom dem. `bergen ligger i` og en annen sekvens med de samme tidligere tokenene kan bli mer like enn naturlig språk tilsier.
 
 ### Attention-softmax
 
@@ -147,6 +170,14 @@ troms:      0.04
 ```
 
 Under generering velger `argmax` tokenet med høyest logit. Virkelige LLM-er kan i stedet sample fra sannsynlighetsfordelingen for å få mer variasjon.
+
+Softmax fordeler alltid 100 prosent sannsynlighet mellom tokenene i vocabulary. Dette er en fordeling over **hvilket token som kommer neste**, ikke en vurdering av om hele utsagnet er sant.
+
+### Hvorfor sier ikke modellen «det vet jeg ikke»?
+
+Modellen har ingen egen handling for «ukjent». `argmax` må velge tokenet med høyest logit, også når forskjellen mellom kandidatene er liten eller prompten ligger langt fra treningsdataene.
+
+En moderne chatmodell kan ha lært tekstmønsteret «det vet jeg ikke» gjennom treningsdata, instruksjonstrening eller annen tilpasning. Det er fortsatt genererte tokens. Grunnmekanismen inneholder ingen separat sannhetsdatabase som først avgjør om modellen kjenner svaret.
 
 ## 5. Loss måler hvor feil prediksjonen var
 
@@ -287,7 +318,7 @@ Attention-laget lagret `input`, query, key, value og attention-sannsynlighetene 
 4. hvordan query og key påvirket scorene
 5. hvordan embedding-vektorene påvirket query, key og value
 
-Underveis lagres gradients for `w_q`, `w_k` og `w_v`. Residualforbindelsen har
+Underveis lagres gradienter for `w_q`, `w_k` og `w_v`. Residualforbindelsen har
 også en direkte derivert lik 1, så `grad_output` legges til gradienten fra
 attention-grenen:
 
@@ -306,7 +337,7 @@ påvirket loss gjennom begge veiene.
 
 Hvis samme token forekommer flere ganger, summeres gradientene. Laget returnerer ikke en ny gradient fordi token-ID-er er heltall og det ikke finnes noe tidligere trenbart lag.
 
-Nå finnes det gradients for alle modellens trenbare vekter:
+Nå finnes det gradienter for alle modellens trenbare vekter:
 
 - embedding-tabellen
 - query-, key- og value-matrisene
@@ -340,6 +371,6 @@ Dette kalles autoregressiv generering: Modellen bruker sin egen output som input
 
 ## 15. Seed og reproduserbarhet
 
-Embedding- og output-vektene starter tilfeldig. En seed bestemmer hvilke startverdier som brukes.
+Embedding-, attention- og output-vektene starter med seedede tilfeldige verdier. Query, key og value får forskjellige trekk fra samme fordeling. Attention bruker en egen RNG-strøm avledet fra samme seed for at denne endringen ikke skal forskyve de allerede dokumenterte startverdiene i embedding- og output-laget.
 
 Samme seed, programversjon, plattform, treningsdata og parametere gir samme resultat. Seed gjør forsøket reproduserbart, men gjør ikke modellen bedre.

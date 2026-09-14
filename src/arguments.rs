@@ -40,6 +40,7 @@ pub struct Args {
     pub d_model: usize,
     pub learning_rate: f32,
     pub seed: u64,
+    pub trace: bool,
     pub file_paths: Vec<String>,
     pub prompt: String,
 }
@@ -50,22 +51,23 @@ pub fn parse_args() -> Args {
     args.remove(0);
 
     if args.is_empty() {
-        eprintln!("Usage: simple-llm [options] <file1> [file2] ... [prompt]");
+        eprintln!("Usage: simple-llm [options] <file1> [file2] ... <prompt>");
         eprintln!();
         eprintln!("Options:");
         eprintln!("  -tokenizer=TYPE  Tokenizer: word or bpe (default: word)");
         eprintln!("  -vocab=N        Target vocabulary size (default: 256)");
-        eprintln!("  -epochs=N       Training epochs per repetition (default: 100)");
+        eprintln!("  -epochs=N       Training epochs (default: 100)");
         eprintln!("  -seq-len=N      Context window size (default: 3)");
         eprintln!("  -d-model=N      Embedding dimension (default: 8)");
         eprintln!("  -learning-rate=N Learning rate (default: 0.001)");
         eprintln!("  -seed=N         Random seed (default: {DEFAULT_SEED})");
         eprintln!("                  Larger d_model needs smaller learning rate");
+        eprintln!("  -trace          Show top next-token candidates for the first 3 steps");
         eprintln!();
         eprintln!("Examples:");
         eprintln!("  simple-llm training.txt \"hello\"");
         eprintln!("  simple-llm -tokenizer=bpe -vocab=300 -seq-len=20 training.txt \"hello\"");
-        eprintln!("  simple-llm -count=3 -vocab=32 file1.txt file2.txt \"a b\"");
+        eprintln!("  simple-llm -vocab=32 file1.txt file2.txt \"a b\"");
         std::process::exit(1);
     }
 
@@ -78,6 +80,7 @@ pub fn parse_args() -> Args {
     let mut d_model: usize = 8;
     let mut learning_rate: f32 = 0.001;
     let mut seed: u64 = DEFAULT_SEED;
+    let mut trace = false;
 
     let mut file_tokens = Vec::new();
 
@@ -137,6 +140,9 @@ pub fn parse_args() -> Args {
                     .parse::<u64>()
                     .unwrap_or(DEFAULT_SEED);
             }
+            "-trace" => {
+                trace = true;
+            }
             s if s.starts_with('-') => {
                 eprintln!("Unknown option: {}", token);
                 std::process::exit(1);
@@ -164,6 +170,7 @@ pub fn parse_args() -> Args {
         d_model,
         learning_rate,
         seed,
+        trace,
         file_paths,
         prompt,
     }
