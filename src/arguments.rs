@@ -55,7 +55,6 @@ pub fn parse_args() -> Args {
         eprintln!("Options:");
         eprintln!("  -tokenizer=TYPE  Tokenizer: word or bpe (default: word)");
         eprintln!("  -vocab=N        Target vocabulary size (default: 256)");
-        eprintln!("  -count=N        Repetitions per file (default: 1)");
         eprintln!("  -epochs=N       Training epochs per repetition (default: 100)");
         eprintln!("  -seq-len=N      Context window size (default: 3)");
         eprintln!("  -d-model=N      Embedding dimension (default: 8)");

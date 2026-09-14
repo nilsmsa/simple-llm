@@ -17,7 +17,6 @@ pub mod multi_train;
 pub mod self_attatention_layer;
 pub mod sliding_window;
 pub mod tokenizer;
-pub mod toy_llm;
 pub mod word_tokenizer;
 
 fn main() {
