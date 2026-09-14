@@ -127,6 +127,10 @@ impl SelfAttentionLayer {
             false,
         );
 
+        //Hjelper med å legge til input til context_sequence for residual connection
+        for i in 0..context_sequence.len() {
+            context_sequence[i] += input[i];
+        }
         self.cache = Some(AttentionCache {
             input: input.to_vec(),
             q: queries,
@@ -284,7 +288,9 @@ impl SelfAttentionLayer {
             false,
             true,
         );
-
+        for i in 0..d_x.len() {
+            d_x[i] += grad_output[i];
+        }
         d_x
     }
 
