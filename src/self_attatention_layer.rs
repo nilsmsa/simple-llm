@@ -59,8 +59,11 @@ impl SelfAttentionLayer {
     /// får. Disse vektene brukes til å blande value-vektorene til ny kontekst.
     pub fn forward(&mut self, input: &[f32], seq_len: usize) -> Vec<f32> {
         let model_width = self.d_model;
+        // Regner ut "q" for hvert token: input multiplisert med vektmatrisen "w_q".
         let queries = project_role(input, &self.w_q, seq_len, model_width);
+        // Samme som over, men med vektmatrisen "w_k" gir dette "k".
         let keys = project_role(input, &self.w_k, seq_len, model_width);
+        // Samme som over, men med vektmatrisen "w_v" gir dette "v".
         let values = project_role(input, &self.w_v, seq_len, model_width);
 
         let mut probs = compute_scores(&queries, &keys, seq_len, model_width);
@@ -97,6 +100,8 @@ impl SelfAttentionLayer {
         let model_width = self.d_model;
 
         let mut d_v = vec![0.0; sequence_length * model_width];
+        // Regner ut hvor mye hver rad i "v" må justeres for å redusere feilen,
+        // basert på hvor mye vekt raden fikk i "probs" for hver posisjon i sekvensen.
         matmul(
             &cache.probs,
             grad_output,
@@ -109,6 +114,8 @@ impl SelfAttentionLayer {
         );
 
         let mut d_probs = vec![0.0; sequence_length * sequence_length];
+        // Regner ut hvor mye feilen ville endret seg om vektingen mellom
+        // posisjonene i "probs" var litt annerledes.
         matmul(
             grad_output,
             &cache.v,
@@ -148,6 +155,8 @@ impl SelfAttentionLayer {
 
         let mut d_q = vec![0.0; sequence_length * model_width];
         let mut d_k = vec![0.0; sequence_length * model_width];
+        // Regner ut hvor mye "q" må justeres, ved å kombinere feilen per
+        // posisjonspar ("d_scores") med de tilhørende radene i "k".
         matmul(
             &d_scores,
             &cache.k,
@@ -158,6 +167,8 @@ impl SelfAttentionLayer {
             false,
             false,
         );
+        // Regner ut hvor mye "k" må justeres, samme feil som over, men nå
+        // koblet mot de tilhørende radene i "q" i stedet.
         matmul(
             &d_scores,
             &cache.q,
@@ -169,6 +180,8 @@ impl SelfAttentionLayer {
             false,
         );
 
+        // Regner ut hvor mye vektmatrisen "w_q" må justeres, ved å kombinere
+        // input-verdiene med feilen som ble funnet for "q" over.
         matmul(
             &cache.input,
             &d_q,
@@ -179,6 +192,7 @@ impl SelfAttentionLayer {
             true,
             false,
         );
+        // Samme som over, men for vektmatrisen "w_k".
         matmul(
             &cache.input,
             &d_k,
@@ -189,6 +203,7 @@ impl SelfAttentionLayer {
             true,
             false,
         );
+        // Samme som over, men for vektmatrisen "w_v".
         matmul(
             &cache.input,
             &d_v,
@@ -201,6 +216,8 @@ impl SelfAttentionLayer {
         );
 
         let mut d_x = vec![0.0; sequence_length * model_width];
+        // Fører feilen fra "q" tilbake til selve input-teksten (embeddingen),
+        // slik at laget under også kan justeres riktig vei.
         matmul(
             &d_q,
             &self.w_q,
@@ -211,6 +228,7 @@ impl SelfAttentionLayer {
             false,
             true,
         );
+        // Samme som over, men feilen fra "k".
         matmul(
             &d_k,
             &self.w_k,
@@ -221,6 +239,7 @@ impl SelfAttentionLayer {
             false,
             true,
         );
+        // Samme som over, men feilen fra "v".
         matmul(
             &d_v,
             &self.w_v,
