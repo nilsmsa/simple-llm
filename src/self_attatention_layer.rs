@@ -18,6 +18,13 @@ pub struct SelfAttentionLayer {
     pub wk_gradients: Vec<f32>,
     pub wv_gradients: Vec<f32>,
     pub cache: Option<AttentionCache>,
+    /// `dLoss/dProbability` for hver (query, key)-attention-vekt fra siste
+    /// `backward`-kall, radvis som `cache.probs`. Positiv verdi betyr at en
+    /// høyere attention-vekt der ville økt loss; negativ verdi betyr at en
+    /// høyere vekt ville redusert loss. Kun til forklaring/trasering — brukes
+    /// ikke videre i selve gradientberegningen (den bruker `d_scores`, som
+    /// går gjennom softmax-jacobianen fra denne verdien).
+    pub last_d_probs: Option<Vec<f32>>,
 }
 
 impl SelfAttentionLayer {
@@ -42,6 +49,7 @@ impl SelfAttentionLayer {
             wk_gradients: vec![0.0; size],
             wv_gradients: vec![0.0; size],
             cache: None,
+            last_d_probs: None,
         }
     }
 
@@ -111,6 +119,7 @@ impl SelfAttentionLayer {
             false,
             true,
         );
+        self.last_d_probs = Some(d_probs.clone());
 
         let mut d_scores = vec![0.0; sequence_length * sequence_length];
         // Softmax-gradienten kobler alle sannsynlighetene i samme attention-rad.
@@ -637,6 +646,7 @@ mod tests {
             w_k,
             w_v,
             cache: None,
+            last_d_probs: None,
         }
     }
 

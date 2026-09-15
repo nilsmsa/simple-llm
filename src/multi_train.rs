@@ -60,37 +60,206 @@ pub fn train_model<T: Tokenizer>(
 
     for _ in 0..epochs {
         for (sequence, target) in sliding_windows(&tokens, model.seq_len) {
-            let embedded_sequence: Vec<f32> = sequence
-                .iter()
-                .flat_map(|&t| model.embedding.forward(t).to_vec())
-                .collect();
-
-            // 1. Forward Pass
-            let context_sequence = model.attention.forward(&embedded_sequence, model.seq_len);
-            let last_token_idx = (model.seq_len - 1) * model.d_model;
-            let last_token_vector =
-                &context_sequence[last_token_idx..(last_token_idx + model.d_model)];
-
-            let predictions = model.linear.forward(last_token_vector);
-            let targets = create_target(&predictions, target as usize);
-
-            let gradients = cross_entropy_derivative(&predictions, &targets);
-
-            // 2. Backward Pass (Linear -> Attention -> Embedding)
-            let d_last_token = model.linear.backward(last_token_vector, &gradients);
-
-            let mut d_context_sequence = vec![0.0; model.seq_len * model.d_model];
-            d_context_sequence[last_token_idx..].copy_from_slice(&d_last_token);
-
-            // Attention pulls its own internal cache now
-            let d_embedded = model.attention.backward(&d_context_sequence);
-            model.embedding.backward(sequence, &d_embedded);
-
-            // 3. Update Weights
-            model.linear.update_weights(learning_rate);
-            model.attention.update_weights(learning_rate);
-            model.embedding.update_weights(learning_rate);
+            train_on_window(model, &sequence, target, learning_rate);
         }
+    }
+}
+
+/// Som `train_model`, men tar stikkprøver av attention og toppkandidat for en
+/// fast prompt (`probe_tokens`) mens treningen pågår.
+///
+/// Stikkprøvene tas mellom epokene, aldri midt i et vindus forward/backward,
+/// så de forstyrrer ikke gradientene. De viser hvordan attention-vektene
+/// beveger seg fra tilfeldige startverdier til det mønsteret `-trace` viser
+/// ved prediksjon.
+pub fn train_model_with_snapshots<T: Tokenizer>(
+    model: &mut Model<T>,
+    training_data: &str,
+    learning_rate: f32,
+    epochs: usize,
+    probe_tokens: &[u32],
+    snapshot_count: usize,
+) -> (Vec<TrainingSnapshot>, BackwardStepTrace) {
+    let tokens: Vec<u32> = model.tokenizer.encode(training_data);
+    let snapshot_epochs = snapshot_schedule(epochs, snapshot_count);
+    let mut snapshots = Vec::with_capacity(snapshot_epochs.len() + 1);
+    let mut backward_trace = None;
+
+    for epoch in 0..epochs {
+        if snapshot_epochs.contains(&epoch) {
+            snapshots.push(capture_training_snapshot(model, probe_tokens, epoch));
+        }
+        let mut windows = sliding_windows(&tokens, model.seq_len);
+        if epoch == 0 {
+            let (sequence, target) = windows
+                .next()
+                .expect("training data must contain at least one window");
+            backward_trace = Some(train_on_window_with_trace(
+                model,
+                sequence,
+                target,
+                learning_rate,
+            ));
+        }
+        for (sequence, target) in windows {
+            train_on_window(model, &sequence, target, learning_rate);
+        }
+    }
+    snapshots.push(capture_training_snapshot(model, probe_tokens, epochs));
+    (
+        snapshots,
+        backward_trace.expect("epochs must be greater than zero to train at all"),
+    )
+}
+
+/// Trener modellen på ett enkelt (kontekst, fasit)-vindu med SGD.
+fn train_on_window<T: Tokenizer>(
+    model: &mut Model<T>,
+    sequence: &[u32],
+    target: u32,
+    learning_rate: f32,
+) {
+    train_on_window_core(model, sequence, target, learning_rate, false);
+}
+
+/// Som `train_on_window`, men samler forward- og backward-verdiene som
+/// forklarer hvorfor attention-vektene beveger seg slik de gjør for akkurat
+/// dette vinduet.
+fn train_on_window_with_trace<T: Tokenizer>(
+    model: &mut Model<T>,
+    sequence: &[u32],
+    target: u32,
+    learning_rate: f32,
+) -> BackwardStepTrace {
+    train_on_window_core(model, sequence, target, learning_rate, true)
+        .expect("trace was requested")
+}
+
+/// Kjerneimplementasjonen for ett treningsvindu. `with_trace` slår av og på
+/// den ekstra bokføringen som `train_on_window_with_trace` trenger, slik at
+/// selve SGD-oppdateringen er identisk uansett.
+fn train_on_window_core<T: Tokenizer>(
+    model: &mut Model<T>,
+    sequence: &[u32],
+    target: u32,
+    learning_rate: f32,
+    with_trace: bool,
+) -> Option<BackwardStepTrace> {
+    let embedded_sequence: Vec<f32> = sequence
+        .iter()
+        .flat_map(|&t| model.embedding.forward(t).to_vec())
+        .collect();
+
+    // 1. Forward Pass
+    let context_sequence = model.attention.forward(&embedded_sequence, model.seq_len);
+    let last_token_idx = (model.seq_len - 1) * model.d_model;
+    let last_token_vector = &context_sequence[last_token_idx..(last_token_idx + model.d_model)];
+
+    let attention_weights_before = with_trace.then(|| last_position_attention_weights(model));
+
+    let predictions = model.linear.forward(last_token_vector);
+    let targets = create_target(&predictions, target as usize);
+
+    let gradients = cross_entropy_derivative(&predictions, &targets);
+    let output_gradients = with_trace.then(|| {
+        gradients
+            .iter()
+            .enumerate()
+            .map(|(token_id, &gradient)| TokenGradient {
+                token_id: token_id as u32,
+                gradient,
+            })
+            .collect::<Vec<_>>()
+    });
+
+    // 2. Backward Pass (Linear -> Attention -> Embedding)
+    let d_last_token = model.linear.backward(last_token_vector, &gradients);
+
+    let mut d_context_sequence = vec![0.0; model.seq_len * model.d_model];
+    d_context_sequence[last_token_idx..].copy_from_slice(&d_last_token);
+
+    // Attention pulls its own internal cache now
+    let d_embedded = model.attention.backward(&d_context_sequence);
+    let attention_probability_gradients = with_trace.then(|| {
+        let sequence_length = model.seq_len;
+        let d_probs = model
+            .attention
+            .last_d_probs
+            .as_ref()
+            .expect("backward just ran and set this");
+        let row_start = (sequence_length - 1) * sequence_length;
+        d_probs[row_start..row_start + sequence_length].to_vec()
+    });
+    model.embedding.backward(sequence, &d_embedded);
+
+    // 3. Update Weights
+    model.linear.update_weights(learning_rate);
+    model.attention.update_weights(learning_rate);
+    model.embedding.update_weights(learning_rate);
+
+    if !with_trace {
+        return None;
+    }
+
+    // De oppdaterte embedding- og attention-vektene brukes til å vise hva
+    // attention faktisk ville gjort med dette vinduet neste gang det dukker
+    // opp, nå som vektene er justert.
+    let updated_embedded_sequence: Vec<f32> = sequence
+        .iter()
+        .flat_map(|&t| model.embedding.forward(t).to_vec())
+        .collect();
+    model
+        .attention
+        .forward(&updated_embedded_sequence, model.seq_len);
+    let attention_weights_after = last_position_attention_weights(model);
+
+    Some(BackwardStepTrace {
+        context_tokens: sequence.to_vec(),
+        target_token: target,
+        attention_weights_before: attention_weights_before.expect("with_trace is true"),
+        output_gradients: output_gradients.expect("with_trace is true"),
+        attention_probability_gradients: attention_probability_gradients
+            .expect("with_trace is true"),
+        attention_weights_after,
+    })
+}
+
+
+/// Velger hvilke epoker en snapshot skal tas ved, jevnt fordelt fra epoke 0.
+///
+/// Selve sluttilstanden (etter siste epoke) legges alltid til separat i
+/// `train_model_with_snapshots`, så den trenger ikke være med her.
+fn snapshot_schedule(epochs: usize, snapshot_count: usize) -> Vec<usize> {
+    if snapshot_count == 0 || epochs == 0 {
+        return Vec::new();
+    }
+    let mut epochs_list: Vec<usize> = (0..snapshot_count)
+        .map(|step| step * epochs / snapshot_count)
+        .collect();
+    epochs_list.dedup();
+    epochs_list
+}
+
+/// Kjører et forward-pass med gjeldende vekter og fanger opp
+/// attention-vektene og toppkandidaten for `probe_tokens`.
+///
+/// Dette gjenbruker `forward`, som ikke muterer noe treningstilstand utover
+/// attention-cachen, så det er trygt å kalle mellom epoker.
+fn capture_training_snapshot<T: Tokenizer>(
+    model: &mut Model<T>,
+    probe_tokens: &[u32],
+    epoch: usize,
+) -> TrainingSnapshot {
+    let logits = forward(model, probe_tokens);
+    let top_prediction = top_predictions(&logits, 1)
+        .into_iter()
+        .next()
+        .expect("vocabulary is non-empty");
+
+    TrainingSnapshot {
+        epoch,
+        attention_weights: last_position_attention_weights(model),
+        top_prediction,
     }
 }
 
@@ -140,11 +309,29 @@ fn generate_tokens<T: Tokenizer>(
                 context_tokens: current_tokens.clone(),
                 candidates: top_predictions(&logits, top_k),
                 selected_token_id: next_token_id,
+                attention_weights: last_position_attention_weights(model),
             });
         }
         current_tokens.push(next_token_id);
     }
     (model.tokenizer.decode(&current_tokens), trace)
+}
+
+/// Henter attention-vekten fra siste posisjon mot hvert tidligere token.
+///
+/// `forward` kaller `attention.forward`, som legger igjen en `probs`-matrise
+/// (én softmax-rad per posisjon) i cachen. Raden for siste posisjon viser
+/// nøyaktig hvor mye oppmerksomhet det neste tokenet baserer seg på fra hvert
+/// token i konteksten, inkludert dem lenger tilbake enn treningens `seq_len`.
+fn last_position_attention_weights<T: Tokenizer>(model: &Model<T>) -> Vec<f32> {
+    let cache = model
+        .attention
+        .cache
+        .as_ref()
+        .expect("forward pass sets the attention cache before this is called");
+    let sequence_length = cache.input.len() / model.d_model;
+    let row_start = (sequence_length - 1) * sequence_length;
+    cache.probs[row_start..row_start + sequence_length].to_vec()
 }
 
 /// Kjører ett forward pass og returnerer logits for neste token.
@@ -193,6 +380,21 @@ pub struct PredictionStep {
     pub context_tokens: Vec<u32>,
     pub candidates: Vec<TokenPrediction>,
     pub selected_token_id: u32,
+    /// Én vekt per token i `context_tokens`, i samme rekkefølge. Viser hvor
+    /// mye det siste tokenet "ser på" hvert tidligere token når det bestemmer
+    /// neste token.
+    pub attention_weights: Vec<f32>,
+}
+
+/// Én stikkprøve av attention og toppkandidat for en fast prompt, tatt et
+/// gitt sted i treningen (`epoch` er antall fullførte epoker på det
+/// tidspunktet).
+#[derive(Debug, PartialEq)]
+pub struct TrainingSnapshot {
+    pub epoch: usize,
+    /// Én vekt per token i probe-konteksten, i samme rekkefølge.
+    pub attention_weights: Vec<f32>,
+    pub top_prediction: TokenPrediction,
 }
 
 /// Ett token og modellens softmax-sannsynlighet for neste posisjon.
@@ -200,6 +402,34 @@ pub struct PredictionStep {
 pub struct TokenPrediction {
     pub token_id: u32,
     pub probability: f32,
+}
+
+/// Cross-entropy-gradienten (`sannsynlighet - fasit`) for ett token i
+/// vocabulary, fra ett enkelt treningssteg. Negativ verdi betyr at loss
+/// reduseres hvis logiten til dette tokenet øker; positiv verdi betyr at
+/// logiten bør ned.
+#[derive(Debug, PartialEq)]
+pub struct TokenGradient {
+    pub token_id: u32,
+    pub gradient: f32,
+}
+
+/// Forward- og backward-verdiene fra ett enkelt treningsvindu, samlet for å
+/// vise konkret hvorfor attention-vektene endrer seg.
+///
+/// `attention_weights_before`/`attention_weights_after` viser den samme
+/// softmax-fordelingen som `-trace` viser ved prediksjon, men målt rett før
+/// og rett etter denne ene SGD-oppdateringen. `attention_probability_gradients`
+/// er `dLoss/dProbability` for hver attention-vekt: et negativt tall betyr at
+/// gradienten "vil" øke akkurat den vekten, fordi det ville redusert loss.
+#[derive(Debug, PartialEq)]
+pub struct BackwardStepTrace {
+    pub context_tokens: Vec<u32>,
+    pub target_token: u32,
+    pub attention_weights_before: Vec<f32>,
+    pub output_gradients: Vec<TokenGradient>,
+    pub attention_probability_gradients: Vec<f32>,
+    pub attention_weights_after: Vec<f32>,
 }
 
 /// Rangerer de mest sannsynlige neste tokenene.

@@ -53,19 +53,122 @@ fn train_and_predict<T: Tokenizer>(tokenizer: T, args: &Args, training_text: &st
     println!("  Embedding: {}", parameters.embedding);
     println!("  Attention (Q, K, V): {}", parameters.attention);
     println!("  Output: {}", parameters.output);
-    multi_train::train_model(&mut model, training_text, args.learning_rate, args.epochs);
     println!("Prompt: '{}'", args.prompt);
     if args.trace {
+        let mut probe_tokens = model.tokenizer.encode(&args.prompt);
+        if probe_tokens.is_empty() {
+            probe_tokens.push(0);
+        }
+        let (snapshots, backward_trace) = multi_train::train_model_with_snapshots(
+            &mut model,
+            training_text,
+            args.learning_rate,
+            args.epochs,
+            &probe_tokens,
+            5,
+        );
+        print_training_snapshots(&model, &probe_tokens, &snapshots);
+        print_backward_trace(&model, &backward_trace);
         let (predicted, trace) =
             multi_train::predict_tokens_with_trace(&mut model, &args.prompt, 50, 3, 3);
         print_prediction_trace(&model, &trace);
         println!("Predicted: '{predicted}'");
     } else {
+        multi_train::train_model(&mut model, training_text, args.learning_rate, args.epochs);
         println!(
             "Predicted: '{}'",
             multi_train::predict_tokens(&mut model, &args.prompt, 50)
         );
     }
+}
+
+/// Skriver hvordan attention-vektene og toppkandidaten for prompten endrer
+/// seg gjennom treningen, fra tilfeldige startvekter til det ferdige
+/// mønsteret.
+fn print_training_snapshots<T: Tokenizer>(
+    model: &multi_train::Model<T>,
+    probe_tokens: &[u32],
+    snapshots: &[multi_train::TrainingSnapshot],
+) {
+    println!("Training trace (probe: '{}'):", model.tokenizer.decode(probe_tokens));
+    for snapshot in snapshots {
+        println!("Epoch {}:", snapshot.epoch);
+        println!("  attention from last token:");
+        for (&token_id, &weight) in probe_tokens.iter().zip(&snapshot.attention_weights) {
+            println!(
+                "    '{}': {:.6}",
+                model.tokenizer.decode(&[token_id]),
+                weight
+            );
+        }
+        println!(
+            "  top prediction: '{}' ({:.6})",
+            model.tokenizer.decode(&[snapshot.top_prediction.token_id]),
+            snapshot.top_prediction.probability
+        );
+    }
+    println!();
+}
+
+/// Skriver forward- og backward-verdiene for det aller første treningsvinduet
+/// (epoke 0, første sliding window), for å vise konkret hvorfor og hvordan
+/// attention-vektene justeres i backward pass.
+fn print_backward_trace<T: Tokenizer>(
+    model: &multi_train::Model<T>,
+    trace: &multi_train::BackwardStepTrace,
+) {
+    println!(
+        "Backward pass trace (first training window: '{}' -> '{}'):",
+        model.tokenizer.decode(&trace.context_tokens),
+        model.tokenizer.decode(&[trace.target_token])
+    );
+    println!("  attention before this update:");
+    for (&token_id, &weight) in trace
+        .context_tokens
+        .iter()
+        .zip(&trace.attention_weights_before)
+    {
+        println!(
+            "    '{}': {:.6}",
+            model.tokenizer.decode(&[token_id]),
+            weight
+        );
+    }
+    println!("  output gradient (probability - fasit) per token:");
+    for token_gradient in &trace.output_gradients {
+        println!(
+            "    '{}': {:+.6}",
+            model.tokenizer.decode(&[token_gradient.token_id]),
+            token_gradient.gradient
+        );
+    }
+    println!(
+        "  attention probability gradient (dLoss/dProbability, negativt = bør økes):"
+    );
+    for (&token_id, &gradient) in trace
+        .context_tokens
+        .iter()
+        .zip(&trace.attention_probability_gradients)
+    {
+        println!(
+            "    '{}': {:+.6}",
+            model.tokenizer.decode(&[token_id]),
+            gradient
+        );
+    }
+    println!("  attention after this update (samme kontekst, oppdaterte vekter):");
+    for (&token_id, &weight) in trace
+        .context_tokens
+        .iter()
+        .zip(&trace.attention_weights_after)
+    {
+        println!(
+            "    '{}': {:.6}",
+            model.tokenizer.decode(&[token_id]),
+            weight
+        );
+    }
+    println!();
 }
 
 /// Skriver kandidatene uten å fremstille token-sannsynlighet som sannhet.
@@ -80,6 +183,14 @@ fn print_prediction_trace<T: Tokenizer>(
             step_index + 1,
             model.tokenizer.decode(&step.context_tokens)
         );
+        println!("  attention from last token:");
+        for (&token_id, &weight) in step.context_tokens.iter().zip(&step.attention_weights) {
+            println!(
+                "    '{}': {:.6}",
+                model.tokenizer.decode(&[token_id]),
+                weight
+            );
+        }
         let shown_probability: f32 = step
             .candidates
             .iter()
