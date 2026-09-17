@@ -5,8 +5,8 @@ use std::{
 
 use simple_llm::{
     arguments::{self, Args, TokenizerKind},
-    multi_train,
     tokenizer::Tokenizer,
+    training,
     word_tokenizer::WordTokenizer,
 };
 
@@ -17,7 +17,7 @@ fn main() {
 /// Leser treningsdata, velger tokenizer og starter hele demoen.
 ///
 /// Dette er koblingen mellom CLI-et og modellkoden. Selve LLM-stegene ligger i
-/// `multi_train`.
+/// `training`.
 fn multi_file_demo() {
     let args = arguments::parse_args();
 
@@ -37,7 +37,7 @@ fn multi_file_demo() {
             train_and_predict(WordTokenizer::build(&training_text), &args, &training_text)
         }
         TokenizerKind::Bpe => train_and_predict(
-            multi_train::build_tokenizer_from_text(&training_text, args.vocab_size),
+            training::build_bpe_tokenizer_from_text(&training_text, args.vocab_size),
             &args,
             &training_text,
         ),
@@ -46,7 +46,7 @@ fn multi_file_demo() {
 
 /// Bygger modellen, trener den og genererer 50 nye tokens fra prompten.
 fn train_and_predict<T: Tokenizer>(tokenizer: T, args: &Args, training_text: &str) {
-    let mut model = multi_train::build_model(tokenizer, args.d_model, args.seq_len, args.seed);
+    let mut model = training::build_model(tokenizer, args.d_model, args.seq_len, args.seed);
     println!("Vocab size: {}", model.vocab_size);
     let parameters = model.parameter_counts();
     println!("Trainable parameters: {}", parameters.total());
@@ -59,7 +59,7 @@ fn train_and_predict<T: Tokenizer>(tokenizer: T, args: &Args, training_text: &st
         if probe_tokens.is_empty() {
             probe_tokens.push(0);
         }
-        let (snapshots, backward_trace) = multi_train::train_model_with_snapshots(
+        let (snapshots, backward_trace) = training::train_model_with_snapshots(
             &mut model,
             training_text,
             args.learning_rate,
@@ -70,14 +70,14 @@ fn train_and_predict<T: Tokenizer>(tokenizer: T, args: &Args, training_text: &st
         print_training_snapshots(&model, &probe_tokens, &snapshots);
         print_backward_trace(&model, &backward_trace);
         let (predicted, trace) =
-            multi_train::predict_tokens_with_trace(&mut model, &args.prompt, 50, 3, 3);
+            training::predict_tokens_with_trace(&mut model, &args.prompt, 50, 3, 3);
         print_prediction_trace(&model, &trace);
         println!("Predicted: '{predicted}'");
     } else {
-        multi_train::train_model(&mut model, training_text, args.learning_rate, args.epochs);
+        training::train_model(&mut model, training_text, args.learning_rate, args.epochs);
         println!(
             "Predicted: '{}'",
-            multi_train::predict_tokens(&mut model, &args.prompt, 50)
+            training::predict_tokens(&mut model, &args.prompt, 50)
         );
     }
 }
@@ -86,11 +86,14 @@ fn train_and_predict<T: Tokenizer>(tokenizer: T, args: &Args, training_text: &st
 /// seg gjennom treningen, fra tilfeldige startvekter til det ferdige
 /// mønsteret.
 fn print_training_snapshots<T: Tokenizer>(
-    model: &multi_train::Model<T>,
+    model: &training::Model<T>,
     probe_tokens: &[u32],
-    snapshots: &[multi_train::TrainingSnapshot],
+    snapshots: &[training::TrainingSnapshot],
 ) {
-    println!("Training trace (probe: '{}'):", model.tokenizer.decode(probe_tokens));
+    println!(
+        "Training trace (probe: '{}'):",
+        model.tokenizer.decode(probe_tokens)
+    );
     for snapshot in snapshots {
         println!("Epoch {}:", snapshot.epoch);
         println!("  attention from last token:");
@@ -114,8 +117,8 @@ fn print_training_snapshots<T: Tokenizer>(
 /// (epoke 0, første sliding window), for å vise konkret hvorfor og hvordan
 /// attention-vektene justeres i backward pass.
 fn print_backward_trace<T: Tokenizer>(
-    model: &multi_train::Model<T>,
-    trace: &multi_train::BackwardStepTrace,
+    model: &training::Model<T>,
+    trace: &training::BackwardStepTrace,
 ) {
     println!(
         "Backward pass trace (first training window: '{}' -> '{}'):",
@@ -142,9 +145,7 @@ fn print_backward_trace<T: Tokenizer>(
             token_gradient.gradient
         );
     }
-    println!(
-        "  attention probability gradient (dLoss/dProbability, negativt = bør økes):"
-    );
+    println!("  attention probability gradient (dLoss/dProbability, negativt = bør økes):");
     for (&token_id, &gradient) in trace
         .context_tokens
         .iter()
@@ -173,8 +174,8 @@ fn print_backward_trace<T: Tokenizer>(
 
 /// Skriver kandidatene uten å fremstille token-sannsynlighet som sannhet.
 fn print_prediction_trace<T: Tokenizer>(
-    model: &multi_train::Model<T>,
-    trace: &[multi_train::PredictionStep],
+    model: &training::Model<T>,
+    trace: &[training::PredictionStep],
 ) {
     println!("Prediction trace:");
     for (step_index, step) in trace.iter().enumerate() {

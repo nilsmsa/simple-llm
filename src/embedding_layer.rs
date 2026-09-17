@@ -1,12 +1,14 @@
 use rand::Rng;
 use rand_distr::{Distribution, Normal};
 
+use crate::matrix::Matrix;
+
 pub struct EmbeddingLayer {
     #[allow(dead_code)]
     pub vocab_size: usize,
     pub d_model: usize,
-    pub weights: Vec<f32>,
-    gradients: Vec<f32>,
+    pub weights: Matrix,
+    gradients: Matrix,
 }
 
 impl EmbeddingLayer {
@@ -17,16 +19,14 @@ impl EmbeddingLayer {
         let normal = Normal::new(0.0, 0.1).expect("Should be ok?");
         let total_weights = vocab_size * d_model;
         let mut weights = Vec::with_capacity(total_weights);
-        let mut gradients = Vec::with_capacity(total_weights);
         for _ in 0..total_weights {
             weights.push(normal.sample(rng) as f32);
-            gradients.push(0.0);
         }
         Self {
             vocab_size,
             d_model,
-            weights,
-            gradients,
+            weights: Matrix::from_vec(vocab_size, d_model, weights),
+            gradients: Matrix::zeros(vocab_size, d_model),
         }
     }
 
@@ -39,8 +39,9 @@ impl EmbeddingLayer {
 
     /// Samler gradientene som viser hvordan hver brukt embedding bør endres.
     /// Hvis et token forekommer flere ganger, summeres bidragene før vektene
-    /// oppdateres.
-    pub fn backward(&mut self, sequence: &[u32], grad_output: &[f32]) {
+    /// oppdateres. `grad_output` er `sequence.len() x d_model`: én rad per
+    /// posisjon i sekvensen.
+    pub fn backward(&mut self, sequence: &[u32], grad_output: &Matrix) {
         for (seq_idx, &token_id) in sequence.iter().enumerate() {
             let token_id = token_id as usize;
             let grad_start_idx = seq_idx * self.d_model;
@@ -94,29 +95,32 @@ mod tests {
     fn backward_places_each_gradient_in_the_corresponding_token_embedding() {
         let mut layer = layer_with_weights(3, 2, vec![0.0; 6]);
         let sequence = [2, 0, 1];
-        let grad_output = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let grad_output = Matrix::from_vec(3, 2, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
 
         layer.backward(&sequence, &grad_output);
         layer.update_weights(1.0);
 
-        assert_eq!(layer.weights, vec![-3.0, -4.0, -5.0, -6.0, -1.0, -2.0]);
+        assert_eq!(layer.weights.data, vec![-3.0, -4.0, -5.0, -6.0, -1.0, -2.0]);
     }
 
     #[test]
     fn backward_accumulates_gradients_for_repeated_tokens_and_calls() {
         let mut layer = layer_with_weights(3, 2, vec![0.0; 6]);
 
-        layer.backward(&[2, 0, 2], &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
-        layer.backward(&[2], &[7.0, 8.0]);
+        layer.backward(
+            &[2, 0, 2],
+            &Matrix::from_vec(3, 2, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        );
+        layer.backward(&[2], &Matrix::from_vec(1, 2, vec![7.0, 8.0]));
         layer.update_weights(1.0);
 
-        assert_eq!(layer.weights, vec![-3.0, -4.0, 0.0, 0.0, -13.0, -16.0]);
+        assert_eq!(layer.weights.data, vec![-3.0, -4.0, 0.0, 0.0, -13.0, -16.0]);
     }
 
     #[test]
     fn update_weights_applies_accumulated_gradients_and_resets_them() {
         let mut layer = layer_with_weights(2, 2, vec![1.0, 2.0, 3.0, 4.0]);
-        layer.backward(&[0, 1], &[0.5, -1.0, 0.0, 2.0]);
+        layer.backward(&[0, 1], &Matrix::from_vec(2, 2, vec![0.5, -1.0, 0.0, 2.0]));
 
         layer.update_weights(0.2);
 
@@ -132,8 +136,8 @@ mod tests {
         EmbeddingLayer {
             vocab_size,
             d_model,
-            gradients: vec![0.0; weights.len()],
-            weights,
+            gradients: Matrix::zeros(vocab_size, d_model),
+            weights: Matrix::from_vec(vocab_size, d_model, weights),
         }
     }
 

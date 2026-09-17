@@ -1,11 +1,13 @@
 use rand::Rng;
 use rand_distr::{Distribution, Normal};
 
+use crate::matrix::Matrix;
+
 pub struct LinearLayer {
     pub d_model: usize,
     pub vocab_size: usize,
-    pub weights: Vec<f32>,
-    pub weight_gradients: Vec<f32>,
+    pub weights: Matrix,
+    pub weight_gradients: Matrix,
 }
 
 impl LinearLayer {
@@ -23,8 +25,8 @@ impl LinearLayer {
         Self {
             d_model,
             vocab_size,
-            weights,
-            weight_gradients: vec![0.0; total_weights],
+            weights: Matrix::from_vec(vocab_size, d_model, weights),
+            weight_gradients: Matrix::zeros(vocab_size, d_model),
         }
     }
 
@@ -284,8 +286,8 @@ mod tests {
         LinearLayer {
             d_model,
             vocab_size,
-            weight_gradients: vec![0.0; weights.len()],
-            weights,
+            weight_gradients: Matrix::zeros(vocab_size, d_model),
+            weights: Matrix::from_vec(vocab_size, d_model, weights),
         }
     }
 

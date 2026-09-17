@@ -2,6 +2,7 @@ use crate::{
     bpe_tokenizer::{build_tokenizer, train},
     embedding_layer::EmbeddingLayer,
     linear_layer::{LinearLayer, cross_entropy_derivative, softmax},
+    matrix::Matrix,
     self_attatention_layer::SelfAttentionLayer,
     sliding_window::sliding_windows,
     tokenizer::Tokenizer,
@@ -9,7 +10,7 @@ use crate::{
 use rand::{SeedableRng, rngs::StdRng};
 
 /// Trener en BPE-tokenizer på teksten og bygger vocabulary fra resultatet.
-pub fn build_tokenizer_from_text(
+pub fn build_bpe_tokenizer_from_text(
     training_text: &str,
     target_vocab_size: u32,
 ) -> crate::bpe_tokenizer::BpeTokenizer {
@@ -60,7 +61,7 @@ pub fn train_model<T: Tokenizer>(
 
     for _ in 0..epochs {
         for (sequence, target) in sliding_windows(&tokens, model.seq_len) {
-            train_on_window(model, &sequence, target, learning_rate);
+            train_on_window(model, sequence, target, learning_rate);
         }
     }
 }
@@ -131,8 +132,7 @@ fn train_on_window_with_trace<T: Tokenizer>(
     target: u32,
     learning_rate: f32,
 ) -> BackwardStepTrace {
-    train_on_window_core(model, sequence, target, learning_rate, true)
-        .expect("trace was requested")
+    train_on_window_core(model, sequence, target, learning_rate, true).expect("trace was requested")
 }
 
 /// Kjerneimplementasjonen for ett treningsvindu. `with_trace` slår av og på
@@ -145,13 +145,17 @@ fn train_on_window_core<T: Tokenizer>(
     learning_rate: f32,
     with_trace: bool,
 ) -> Option<BackwardStepTrace> {
-    let embedded_sequence: Vec<f32> = sequence
-        .iter()
-        .flat_map(|&t| model.embedding.forward(t).to_vec())
-        .collect();
+    let embedded_sequence = Matrix::from_vec(
+        model.seq_len,
+        model.d_model,
+        sequence
+            .iter()
+            .flat_map(|&t| model.embedding.forward(t).to_vec())
+            .collect(),
+    );
 
     // 1. Forward Pass
-    let context_sequence = model.attention.forward(&embedded_sequence, model.seq_len);
+    let context_sequence = model.attention.forward(&embedded_sequence);
     let last_token_idx = (model.seq_len - 1) * model.d_model;
     let last_token_vector = &context_sequence[last_token_idx..(last_token_idx + model.d_model)];
 
@@ -175,7 +179,7 @@ fn train_on_window_core<T: Tokenizer>(
     // 2. Backward Pass (Linear -> Attention -> Embedding)
     let d_last_token = model.linear.backward(last_token_vector, &gradients);
 
-    let mut d_context_sequence = vec![0.0; model.seq_len * model.d_model];
+    let mut d_context_sequence = Matrix::zeros(model.seq_len, model.d_model);
     d_context_sequence[last_token_idx..].copy_from_slice(&d_last_token);
 
     // Attention pulls its own internal cache now
@@ -204,13 +208,15 @@ fn train_on_window_core<T: Tokenizer>(
     // De oppdaterte embedding- og attention-vektene brukes til å vise hva
     // attention faktisk ville gjort med dette vinduet neste gang det dukker
     // opp, nå som vektene er justert.
-    let updated_embedded_sequence: Vec<f32> = sequence
-        .iter()
-        .flat_map(|&t| model.embedding.forward(t).to_vec())
-        .collect();
-    model
-        .attention
-        .forward(&updated_embedded_sequence, model.seq_len);
+    let updated_embedded_sequence = Matrix::from_vec(
+        model.seq_len,
+        model.d_model,
+        sequence
+            .iter()
+            .flat_map(|&t| model.embedding.forward(t).to_vec())
+            .collect(),
+    );
+    model.attention.forward(&updated_embedded_sequence);
     let attention_weights_after = last_position_attention_weights(model);
 
     Some(BackwardStepTrace {
@@ -223,7 +229,6 @@ fn train_on_window_core<T: Tokenizer>(
         attention_weights_after,
     })
 }
-
 
 /// Velger hvilke epoker en snapshot skal tas ved, jevnt fordelt fra epoke 0.
 ///
@@ -329,7 +334,7 @@ fn last_position_attention_weights<T: Tokenizer>(model: &Model<T>) -> Vec<f32> {
         .cache
         .as_ref()
         .expect("forward pass sets the attention cache before this is called");
-    let sequence_length = cache.input.len() / model.d_model;
+    let sequence_length = cache.input.rows;
     let row_start = (sequence_length - 1) * sequence_length;
     cache.probs[row_start..row_start + sequence_length].to_vec()
 }
@@ -340,12 +345,13 @@ fn last_position_attention_weights<T: Tokenizer>(model: &Model<T>) -> Vec<f32> {
 /// teksten etter hele konteksten.
 pub fn forward<T: Tokenizer>(model: &mut Model<T>, tokens: &[u32]) -> Vec<f32> {
     let seq_len = tokens.len();
-    let mut embedded_sequence = Vec::with_capacity(seq_len * model.embedding.d_model);
+    let mut embedded_data = Vec::with_capacity(seq_len * model.embedding.d_model);
     for &token_id in tokens {
         let token_vector = model.embedding.forward(token_id);
-        embedded_sequence.extend_from_slice(token_vector);
+        embedded_data.extend_from_slice(token_vector);
     }
-    let context_aware_sequence = model.attention.forward(&embedded_sequence, seq_len);
+    let embedded_sequence = Matrix::from_vec(seq_len, model.embedding.d_model, embedded_data);
+    let context_aware_sequence = model.attention.forward(&embedded_sequence);
     let start_idx = (seq_len - 1) * model.attention.d_model;
     let last_token_vector = &context_aware_sequence[start_idx..];
     model.linear.forward(last_token_vector)

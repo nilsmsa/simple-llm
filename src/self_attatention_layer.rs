@@ -1,22 +1,28 @@
 use rand::Rng;
 use rand_distr::{Distribution, Normal};
 
+use crate::matrix::Matrix;
+
+/// `input`, `q`, `k` og `v` har én rad per token og én kolonne per feature
+/// (`seq_len x d_model`). `probs` har én rad og én kolonne per token
+/// (`seq_len x seq_len`): rad `i` er softmax-fordelingen tokenet på posisjon
+/// `i` bruker til å blande sammen `v`.
 pub struct AttentionCache {
-    pub input: Vec<f32>,
-    pub q: Vec<f32>,
-    pub k: Vec<f32>,
-    pub v: Vec<f32>,
-    pub probs: Vec<f32>,
+    pub input: Matrix,
+    pub q: Matrix,
+    pub k: Matrix,
+    pub v: Matrix,
+    pub probs: Matrix,
 }
 
 pub struct SelfAttentionLayer {
     pub d_model: usize,
-    pub w_q: Vec<f32>,
-    pub w_k: Vec<f32>,
-    pub w_v: Vec<f32>,
-    pub wq_gradients: Vec<f32>,
-    pub wk_gradients: Vec<f32>,
-    pub wv_gradients: Vec<f32>,
+    pub w_q: Matrix,
+    pub w_k: Matrix,
+    pub w_v: Matrix,
+    pub wq_gradients: Matrix,
+    pub wk_gradients: Matrix,
+    pub wv_gradients: Matrix,
     pub cache: Option<AttentionCache>,
     /// `dLoss/dProbability` for hver (query, key)-attention-vekt fra siste
     /// `backward`-kall, radvis som `cache.probs`. Positiv verdi betyr at en
@@ -24,7 +30,7 @@ pub struct SelfAttentionLayer {
     /// høyere vekt ville redusert loss. Kun til forklaring/trasering — brukes
     /// ikke videre i selve gradientberegningen (den bruker `d_scores`, som
     /// går gjennom softmax-jacobianen fra denne verdien).
-    pub last_d_probs: Option<Vec<f32>>,
+    pub last_d_probs: Option<Matrix>,
 }
 
 impl SelfAttentionLayer {
@@ -33,21 +39,21 @@ impl SelfAttentionLayer {
     /// De tre rollene lar modellen lære hva et token leter etter, hva det
     /// tilbyr som kontekst, og hvilken informasjon som skal sendes videre.
     pub fn new<R: Rng + ?Sized>(d_model: usize, rng: &mut R) -> Self {
-        let size = d_model * d_model;
         let normal = Normal::new(0.0, 0.01).expect("standard deviation is positive");
         let mut random_weights = || {
-            (0..size)
+            let values = (0..d_model * d_model)
                 .map(|_| normal.sample(rng) as f32)
-                .collect::<Vec<_>>()
+                .collect::<Vec<_>>();
+            Matrix::from_vec(d_model, d_model, values)
         };
         Self {
             d_model,
             w_q: random_weights(),
             w_k: random_weights(),
             w_v: random_weights(),
-            wq_gradients: vec![0.0; size],
-            wk_gradients: vec![0.0; size],
-            wv_gradients: vec![0.0; size],
+            wq_gradients: Matrix::zeros(d_model, d_model),
+            wk_gradients: Matrix::zeros(d_model, d_model),
+            wv_gradients: Matrix::zeros(d_model, d_model),
             cache: None,
             last_d_probs: None,
         }
@@ -57,27 +63,29 @@ impl SelfAttentionLayer {
     ///
     /// Query og key bestemmer hvor mye oppmerksomhet hvert tidligere token
     /// får. Disse vektene brukes til å blande value-vektorene til ny kontekst.
-    pub fn forward(&mut self, input: &[f32], seq_len: usize) -> Vec<f32> {
-        let model_width = self.d_model;
+    ///
+    /// `input` er én rad per token (`seq_len x d_model`), så sekvenslengden
+    /// leses av matrisen selv i stedet for å bli sendt inn som egen parameter.
+    pub fn forward(&mut self, input: &Matrix) -> Matrix {
         // Regner ut "q" for hvert token: input multiplisert med vektmatrisen "w_q".
-        let queries = project_role(input, &self.w_q, seq_len, model_width);
+        let queries = project_role(input, &self.w_q);
         // Samme som over, men med vektmatrisen "w_k" gir dette "k".
-        let keys = project_role(input, &self.w_k, seq_len, model_width);
+        let keys = project_role(input, &self.w_k);
         // Samme som over, men med vektmatrisen "w_v" gir dette "v".
-        let values = project_role(input, &self.w_v, seq_len, model_width);
+        let values = project_role(input, &self.w_v);
 
-        let mut probs = compute_scores(&queries, &keys, seq_len, model_width);
-        apply_causal_mask(&mut probs, seq_len);
-        softmax_rows(&mut probs, seq_len);
+        let mut probs = compute_scores(&queries, &keys);
+        apply_causal_mask(&mut probs);
+        softmax_rows(&mut probs);
 
-        let mut context_sequence = mix_values(&probs, &values, seq_len, model_width);
+        let mut context_sequence = mix_values(&probs, &values);
 
         // Bevar tokenets egen embedding ved å legge den til attention-resultatet.
-        for (context_value, input_value) in context_sequence.iter_mut().zip(input) {
+        for (context_value, input_value) in context_sequence.iter_mut().zip(input.iter()) {
             *context_value += input_value;
         }
         self.cache = Some(AttentionCache {
-            input: input.to_vec(),
+            input: input.clone(),
             q: queries,
             k: keys,
             v: values,
@@ -91,15 +99,15 @@ impl SelfAttentionLayer {
     ///
     /// Funksjonen finner både hvordan query-, key- og value-vektene bør
     /// endres, og hvilket feilsignal embedding-laget skal få.
-    pub fn backward(&mut self, grad_output: &[f32]) -> Vec<f32> {
+    pub fn backward(&mut self, grad_output: &Matrix) -> Matrix {
         let cache = self
             .cache
             .as_ref()
             .expect("Forward pass required before backward");
-        let sequence_length = cache.input.len() / self.d_model;
+        let sequence_length = cache.input.rows;
         let model_width = self.d_model;
 
-        let mut d_v = vec![0.0; sequence_length * model_width];
+        let mut d_v = Matrix::zeros(sequence_length, model_width);
         // Regner ut hvor mye hver rad i "v" må justeres for å redusere feilen,
         // basert på hvor mye vekt raden fikk i "probs" for hver posisjon i sekvensen.
         matmul(
@@ -113,7 +121,7 @@ impl SelfAttentionLayer {
             false,
         );
 
-        let mut d_probs = vec![0.0; sequence_length * sequence_length];
+        let mut d_probs = Matrix::zeros(sequence_length, sequence_length);
         // Regner ut hvor mye feilen ville endret seg om vektingen mellom
         // posisjonene i "probs" var litt annerledes.
         matmul(
@@ -128,7 +136,7 @@ impl SelfAttentionLayer {
         );
         self.last_d_probs = Some(d_probs.clone());
 
-        let mut d_scores = vec![0.0; sequence_length * sequence_length];
+        let mut d_scores = Matrix::zeros(sequence_length, sequence_length);
         // Softmax-gradienten kobler alle sannsynlighetene i samme attention-rad.
         for query_index in 0..sequence_length {
             let row_start = query_index * sequence_length;
@@ -153,8 +161,8 @@ impl SelfAttentionLayer {
             }
         }
 
-        let mut d_q = vec![0.0; sequence_length * model_width];
-        let mut d_k = vec![0.0; sequence_length * model_width];
+        let mut d_q = Matrix::zeros(sequence_length, model_width);
+        let mut d_k = Matrix::zeros(sequence_length, model_width);
         // Regner ut hvor mye "q" må justeres, ved å kombinere feilen per
         // posisjonspar ("d_scores") med de tilhørende radene i "k".
         matmul(
@@ -215,7 +223,7 @@ impl SelfAttentionLayer {
             false,
         );
 
-        let mut d_x = vec![0.0; sequence_length * model_width];
+        let mut d_x = Matrix::zeros(sequence_length, model_width);
         // Fører feilen fra "q" tilbake til selve input-teksten (embeddingen),
         // slik at laget under også kan justeres riktig vei.
         matmul(
@@ -273,9 +281,13 @@ impl SelfAttentionLayer {
 /// Projiserer hver embedding til en ny rolle, for eksempel query eller key.
 ///
 /// Samme projeksjonsmatrise brukes på alle tokens, og vektene læres under
-/// trening.
-pub fn project_role(input: &[f32], weights: &[f32], seq_len: usize, d_model: usize) -> Vec<f32> {
-    let mut output = vec![0.0; seq_len * d_model];
+/// trening. `input` er `seq_len x d_model` og `weights` er `d_model x
+/// d_model`, så formen på resultatet leses av `input` i stedet for å bli
+/// gjentatt som egne parametere.
+pub fn project_role(input: &Matrix, weights: &Matrix) -> Matrix {
+    let seq_len = input.rows;
+    let d_model = input.cols;
+    let mut output = Matrix::zeros(seq_len, d_model);
     for row in 0..seq_len {
         for col in 0..d_model {
             let mut sum = 0.0;
@@ -295,9 +307,12 @@ pub fn project_role(input: &[f32], weights: &[f32], seq_len: usize, d_model: usi
 ///
 /// Dot product gir høy score når vektorene både peker i samme retning og har
 /// stor størrelse. Skalering med kvadratroten av `d_model` holder tallene i et
-/// stabilt område.
-pub fn compute_scores(queries: &[f32], keys: &[f32], seq_len: usize, d_model: usize) -> Vec<f32> {
-    let mut scores = vec![0.0; seq_len * seq_len];
+/// stabilt område. `queries` og `keys` er begge `seq_len x d_model`, og
+/// resultatet er `seq_len x seq_len`: én score per (query, key)-par.
+pub fn compute_scores(queries: &Matrix, keys: &Matrix) -> Matrix {
+    let seq_len = queries.rows;
+    let d_model = queries.cols;
+    let mut scores = Matrix::zeros(seq_len, seq_len);
     let scale = (d_model as f32).sqrt();
     for q_row in 0..seq_len {
         for k_row in 0..seq_len {
@@ -317,14 +332,12 @@ pub fn compute_scores(queries: &[f32], keys: &[f32], seq_len: usize, d_model: us
 /// Lager kontekst ved å ta et vektet gjennomsnitt av value-vektorene.
 ///
 /// Attention-sannsynlighetene bestemmer hvilke tidligere tokens som bidrar
-/// mest til representasjonen ved hver posisjon.
-pub fn mix_values(
-    attention_probs: &[f32],
-    values: &[f32],
-    seq_len: usize,
-    d_model: usize,
-) -> Vec<f32> {
-    let mut mixed = vec![0.0; seq_len * d_model];
+/// mest til representasjonen ved hver posisjon. `attention_probs` er
+/// `seq_len x seq_len` og `values` er `seq_len x d_model`.
+pub fn mix_values(attention_probs: &Matrix, values: &Matrix) -> Matrix {
+    let seq_len = values.rows;
+    let d_model = values.cols;
+    let mut mixed = Matrix::zeros(seq_len, d_model);
     for row in 0..seq_len {
         for col in 0..d_model {
             let mut sum = 0.0;
@@ -343,7 +356,8 @@ pub fn mix_values(
 /// Skjuler framtidige tokens, slik at modellen ikke kan se fasiten.
 ///
 /// Dette gjør attention causal og er nødvendig for ærlig neste-token-trening.
-pub fn apply_causal_mask(scores: &mut [f32], seq_len: usize) {
+pub fn apply_causal_mask(scores: &mut Matrix) {
+    let seq_len = scores.rows;
     for row in 0..seq_len {
         for col in 0..seq_len {
             if col > row {
@@ -357,7 +371,8 @@ pub fn apply_causal_mask(scores: &mut [f32], seq_len: usize) {
 /// Gjør attention-scorene i hver rad om til sannsynligheter.
 ///
 /// Maskerte posisjoner får 0, mens de synlige posisjonene summerer til 1.
-pub fn softmax_rows(scores: &mut [f32], seq_len: usize) {
+pub fn softmax_rows(scores: &mut Matrix) {
+    let seq_len = scores.rows;
     for row in 0..seq_len {
         let row_start = row * seq_len;
 
@@ -392,11 +407,16 @@ pub fn softmax_rows(scores: &mut [f32], seq_len: usize) {
 ///
 /// Transpose-flaggene gjør at samme hjelpefunksjon kan brukes i både forward
 /// pass og backpropagation. Resultatet legges til eksisterende verdier i `c`.
+///
+/// `m`, `n` og `k` beskriver formen på selve multiplikasjonen (`m x k`
+/// ganger `k x n` gir `m x n`), ikke nødvendigvis `a.rows`/`a.cols` direkte,
+/// siden transpose-flaggene lar samme lagrede matrise brukes «på tvers».
+/// Derfor beholdes de som egne parametere i stedet for å leses fra `a`/`b`.
 #[allow(clippy::too_many_arguments)]
 pub fn matmul(
-    a: &[f32],
-    b: &[f32],
-    c: &mut [f32],
+    a: &Matrix,
+    b: &Matrix,
+    c: &mut Matrix,
     m: usize,
     n: usize,
     k: usize,
@@ -451,33 +471,33 @@ mod tests {
 
     #[test]
     fn project_role_multiplies_each_token_by_the_projection_matrix() {
-        let input = [1.0, 2.0, 3.0, 4.0];
-        let weights = [1.0, 2.0, 3.0, 4.0];
+        let input = Matrix::from_vec(2, 2, vec![1.0, 2.0, 3.0, 4.0]);
+        let weights = Matrix::from_vec(2, 2, vec![1.0, 2.0, 3.0, 4.0]);
 
-        let projected = project_role(&input, &weights, 2, 2);
+        let projected = project_role(&input, &weights);
 
         assert_float_slices_eq(&projected, &[7.0, 10.0, 15.0, 22.0], TOLERANCE);
     }
 
     #[test]
     fn compute_scores_calculates_scaled_query_key_dot_products() {
-        let queries = [1.0, 0.0, 0.0, 2.0];
-        let keys = [3.0, 0.0, 0.0, 4.0];
+        let queries = Matrix::from_vec(2, 2, vec![1.0, 0.0, 0.0, 2.0]);
+        let keys = Matrix::from_vec(2, 2, vec![3.0, 0.0, 0.0, 4.0]);
         let scale = 2.0_f32.sqrt();
 
-        let scores = compute_scores(&queries, &keys, 2, 2);
+        let scores = compute_scores(&queries, &keys);
 
         assert_float_slices_eq(&scores, &[3.0 / scale, 0.0, 0.0, 8.0 / scale], TOLERANCE);
     }
 
     #[test]
     fn apply_causal_mask_blocks_attention_to_future_tokens() {
-        let mut scores = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0];
+        let mut scores = Matrix::from_vec(3, 3, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0]);
 
-        apply_causal_mask(&mut scores, 3);
+        apply_causal_mask(&mut scores);
 
         assert_eq!(
-            scores,
+            scores.data,
             vec![
                 1.0,
                 f32::NEG_INFINITY,
@@ -494,9 +514,9 @@ mod tests {
 
     #[test]
     fn softmax_rows_normalizes_each_row_and_keeps_masked_values_at_zero() {
-        let mut scores = [1_000.0, f32::NEG_INFINITY, 1_000.0, 1_000.0];
+        let mut scores = Matrix::from_vec(2, 2, vec![1_000.0, f32::NEG_INFINITY, 1_000.0, 1_000.0]);
 
-        softmax_rows(&mut scores, 2);
+        softmax_rows(&mut scores);
 
         assert_float_slices_eq(&scores, &[1.0, 0.0, 0.5, 0.5], TOLERANCE);
         for row in scores.chunks(2) {
@@ -506,32 +526,32 @@ mod tests {
 
     #[test]
     fn mix_values_calculates_weighted_value_sums_for_each_token() {
-        let attention_probs = [1.0, 0.0, 0.25, 0.75];
-        let values = [2.0, 4.0, 6.0, 8.0];
+        let attention_probs = Matrix::from_vec(2, 2, vec![1.0, 0.0, 0.25, 0.75]);
+        let values = Matrix::from_vec(2, 2, vec![2.0, 4.0, 6.0, 8.0]);
 
-        let mixed = mix_values(&attention_probs, &values, 2, 2);
+        let mixed = mix_values(&attention_probs, &values);
 
         assert_float_slices_eq(&mixed, &[2.0, 4.0, 5.0, 7.0], TOLERANCE);
     }
 
     #[test]
     fn matmul_multiplies_matrices_and_accumulates_into_output() {
-        let a = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-        let b = [7.0, 8.0, 9.0, 10.0, 11.0, 12.0];
-        let mut output = [1.0; 4];
+        let a = Matrix::from_vec(2, 3, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+        let b = Matrix::from_vec(3, 2, vec![7.0, 8.0, 9.0, 10.0, 11.0, 12.0]);
+        let mut output = Matrix::from_vec(2, 2, vec![1.0; 4]);
 
         matmul(&a, &b, &mut output, 2, 2, 3, false, false);
 
-        assert_eq!(output, [59.0, 65.0, 140.0, 155.0]);
+        assert_eq!(output.data, vec![59.0, 65.0, 140.0, 155.0]);
     }
 
     #[test]
     fn matmul_supports_transposed_inputs() {
-        let a_transposed = [1.0, 4.0, 2.0, 5.0, 3.0, 6.0];
-        let b = [7.0, 8.0, 9.0, 10.0, 11.0, 12.0];
-        let b_transposed = [7.0, 9.0, 11.0, 8.0, 10.0, 12.0];
-        let mut with_transposed_a = [0.0; 4];
-        let mut with_transposed_b = [0.0; 4];
+        let a_transposed = Matrix::from_vec(3, 2, vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
+        let b = Matrix::from_vec(3, 2, vec![7.0, 8.0, 9.0, 10.0, 11.0, 12.0]);
+        let b_transposed = Matrix::from_vec(2, 3, vec![7.0, 9.0, 11.0, 8.0, 10.0, 12.0]);
+        let mut with_transposed_a = Matrix::zeros(2, 2);
+        let mut with_transposed_b = Matrix::zeros(2, 2);
 
         matmul(
             &a_transposed,
@@ -544,7 +564,7 @@ mod tests {
             false,
         );
         matmul(
-            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            &Matrix::from_vec(2, 3, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]),
             &b_transposed,
             &mut with_transposed_b,
             2,
@@ -554,8 +574,8 @@ mod tests {
             true,
         );
 
-        assert_eq!(with_transposed_a, [58.0, 64.0, 139.0, 154.0]);
-        assert_eq!(with_transposed_b, [58.0, 64.0, 139.0, 154.0]);
+        assert_eq!(with_transposed_a.data, [58.0, 64.0, 139.0, 154.0]);
+        assert_eq!(with_transposed_b.data, [58.0, 64.0, 139.0, 154.0]);
     }
 
     #[test]
@@ -565,13 +585,13 @@ mod tests {
             vec![1.0, 0.0, 0.0, 1.0],
             vec![1.0, 0.0, 0.0, 1.0],
         );
-        let input = [1.0, 0.0, 0.0, 1.0];
+        let input = Matrix::from_vec(2, 2, vec![1.0, 0.0, 0.0, 1.0]);
         let second_token_self_attention = (1.0 / 2.0_f32.sqrt()).exp();
         let second_token_first_probability = 1.0 / (1.0 + second_token_self_attention);
         let second_token_self_probability =
             second_token_self_attention / (1.0 + second_token_self_attention);
 
-        let output = layer.forward(&input, 2);
+        let output = layer.forward(&input);
 
         assert_float_slices_eq(
             &output,
@@ -593,9 +613,9 @@ mod tests {
         let w_k = vec![-0.1, 0.5, 0.2, 0.3];
         let w_v = vec![0.6, -0.3, 0.2, 0.8];
         let mut layer = layer_with_weights(w_q.clone(), w_k.clone(), w_v.clone());
-        layer.forward(&input, 2);
+        layer.forward(&Matrix::from_vec(2, 2, input.clone()));
 
-        let input_gradients = layer.backward(&grad_output);
+        let input_gradients = layer.backward(&Matrix::from_vec(2, 2, grad_output.to_vec()));
 
         let numerical_input_gradients =
             numerical_input_gradients(&input, &grad_output, &w_q, &w_k, &w_v);
@@ -641,7 +661,7 @@ mod tests {
     #[should_panic]
     fn backward_requires_a_forward_pass() {
         let mut rng = StdRng::seed_from_u64(42);
-        SelfAttentionLayer::new(2, &mut rng).backward(&[0.0; 4]);
+        SelfAttentionLayer::new(2, &mut rng).backward(&Matrix::zeros(2, 2));
     }
 
     #[derive(Clone, Copy)]
@@ -658,12 +678,12 @@ mod tests {
         assert_eq!(d_model * d_model, w_q.len());
         SelfAttentionLayer {
             d_model,
-            wq_gradients: vec![0.0; w_q.len()],
-            wk_gradients: vec![0.0; w_k.len()],
-            wv_gradients: vec![0.0; w_v.len()],
-            w_q,
-            w_k,
-            w_v,
+            wq_gradients: Matrix::zeros(d_model, d_model),
+            wk_gradients: Matrix::zeros(d_model, d_model),
+            wv_gradients: Matrix::zeros(d_model, d_model),
+            w_q: Matrix::from_vec(d_model, d_model, w_q),
+            w_k: Matrix::from_vec(d_model, d_model, w_k),
+            w_v: Matrix::from_vec(d_model, d_model, w_v),
             cache: None,
             last_d_probs: None,
         }
@@ -732,8 +752,10 @@ mod tests {
         w_v: &[f32],
     ) -> f32 {
         let mut layer = layer_with_weights(w_q.to_vec(), w_k.to_vec(), w_v.to_vec());
+        let seq_len = input.len() / layer.d_model;
+        let d_model = layer.d_model;
         layer
-            .forward(input, input.len() / layer.d_model)
+            .forward(&Matrix::from_vec(seq_len, d_model, input.to_vec()))
             .iter()
             .zip(grad_output)
             .map(|(output, gradient)| output * gradient)
